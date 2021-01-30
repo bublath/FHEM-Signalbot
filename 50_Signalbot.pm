@@ -759,17 +759,19 @@ sub SignalBot_IdentifyStream($$) {
 		<br><br>
 		Supported functionality (mainly due to limitations of the signal-cli dbus interface:<br>
 		<ul>
-		<li>Send messages to individuals and/or groups with or without attachments<\li>
+		<li>Send messages to individuals and/or groups with or without attachments</li>
 		<li>Retrieve the list of joined groups in order to allow using group names when sending (automatically done when encountering an unknown group)</li>
-		<b>What is the difference to the already existing SiSi:</b><br><br>
+		<br><b>What is the difference to the already existing SiSi:</b><br><br>
 		<li>Works without forking a new thread, thus saving a lot of memory</li>
 		<li>Groups are always translated to names instead of cryptic base64 encoding</li>
-		<li>Contact can be used if known. Names will be discovered when getting messages or initially sending to the phone number</li>
+		<li>Contact name can be used if known. Names will be discovered when getting messages or initially sending to the phone number</li>
+		<li>Interpretation FHEM/Perl round brackets () as commands which result can we used to dynamically create text or get streams for attachments e.g. SVG plots like in TelegramBot>/li>
 		<b>Limitations:</b><br>
 		<li>The whole setup, registration and eving joining groups has to be done from signal-cli since a lot of functionality is not supported (yet) via the Dbus interface</li>
+		<li>Contacts need to be discovered and cannot be loaded (limitation of signal-cli), but existing list can be saved to a reading</li>
 		<br>
 		<br>
-		<\ul>
+		</ul>
 	<a name="SignalbotDefine"></a><br>
 	<b>Define</b>
 	<ul>
@@ -781,14 +783,40 @@ sub SignalBot_IdentifyStream($$) {
 	<a name="SignalbotSet"></a>
 	<b>Set</b>
 	<ul>
-		<li>set &lt;name&gt; &lt;send&gt; [@&lt;Recipient1&gt; ... @&lt;RecipientN&gt;] [#&lt;GroupId1&gt; ... #&lt;GroupIdN&gt;] [&&lt;Attachment1&gt; ... &&lt;AttachmentN&gt;] [&lt;Text&gt;]<br>
+		<li><b>set &lt;name&gt; &lt;send&gt; [@&lt;Recipient1&gt; ... @&lt;RecipientN&gt;] [#&lt;GroupId1&gt; ... #&lt;GroupIdN&gt;] [&&lt;Attachment1&gt; ... &&lt;AttachmentN&gt;] [&lt;Text&gt;]</b><br>
+			<a name="send"></a>
 			<ul>
-			Note:
+			<li>Use round brackets to let FHEM execute the content (e.g <code>&({plotAsPng('SVG_Temperatures')}</code></li>
+			<li>If a recipient, group or attachment contains white spaces, the whole expression (including @ # or &) needs to be put in double quotes. Escape quotes with \"</li>
+			<li>If the round brackets contain curly brackets to execute Perl commands, two semi-colons (;;) need to be used to seperate multiple commands and at the end</li>
+			</ul>
+		</li>
+		<li>Note:<br>
+			<a name="send2"></a>
+			<ul>
 			<li>Messages to multiple recipients will be sent as one message</li>
 			<li>Messages to multiple groups or mixed with individual recipients will be sent in multiple messages</li>
 			<li>Note the difference to SiSi: Groups are only marked with "#" and have to be real group names (like shown in the app)</li>
-			<li>When sending to multiple recipients, the readings sendMsgRecipient and sentMsgTimestamp will only contain the last recipient to confirm delivery</li>
+			<li>Attachments need to containt valid pathnames readable for the fhem user</li>
+			<li>Recipients can be either contact names or phone numbers (starting with +). Since signal-cli only understand phone numbers, 
+			Signalbot tries to translate known contact names from its cache and might fail to send the message if unable to decode the contact<br>
+			<br>
+			Example:<br>
+			<code>set Signalbot send "@({my $var=\"Joerg\";; return $var;;})" #FHEM "&( {plotAsPng('SVG_Temperatures')} )" Here come the current temperature plot</code><br>
 			</ul>
+			<br>			
+		</li>
+		<a name="refreshGroups"></a>
+		<li><b>set refreshGroups</b><br>
+		Read the currently joined groups from Signal. Typically not necessary since groups get discovered on the fly. The list is saved in the reading "joinedGroups"<br>
+		</li>
+		<li><b>set saveContacts</b><br>
+		<a name="saveContacts"></a>
+		Save the internal list of discovered contact name to phone number conversions into the reading "contactList"<br>
+		</li>
+		<li><b>set reinit</b><br>
+		<a name="reinit"></a>
+		Re-Initialize the module. For testing purposes when module stops receiving or has other issues. Should not be necessary.<br>
 		</li>
 		<br>
 	</ul>
@@ -807,6 +835,28 @@ sub SignalBot_IdentifyStream($$) {
 		<li><a href="#do_not_notify">do_not_notify</a></li>
 		<li><a href="#showtime">showtime</a></li>
 	</ul>
+	<br>
+	<a name="SignalbotReadings"></a>
+	<b>Readings</b>
+	<ul>
+		<br>
+		<li>(prev)msgAttachment</li>
+		Attachment(s) of the last received (or for history reasons the previous before). The path points to the storage in signal-cli and can be used to retrieve the attachment.<br>
+		<li>(prev)msgGroupName</li>
+		Group of the last message (or for history reasons the previous before). Empty if last message was a private message<br>
+		<li>(prev)msgSender</li>
+		Sender that sent the last message (or previous before) <br>
+		<li>(prev)msgText</li>
+		Content of the last message <br>
+		<li>(prev)msgTimestamp</li>
+		Time the last message was sent (a bit redundant, since all readings have a timestamp anyway<br>
+		<li>sentMsg</li>
+		Content of the last message that was sent from this module<br>
+		<li>sentRecipient</li>
+		Recipient of the last message that was sent<br>
+		This is taken from the actual reply and will contain the last recipient that confirmed getting the message in case multiple recipients or group memebers got it<br>
+		<li>sendMsgTimestamp</li>
+		Timestamp the message was received by the recipient. Will show pending of not confirmed (likely only if even the Signal server did not get it)<br>
 	<br>
 </ul>
 

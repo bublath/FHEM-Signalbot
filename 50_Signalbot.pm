@@ -9,6 +9,9 @@ use warnings;
 use Net::DBus;
 use Net::DBus::Reactor;
 use Scalar::Util qw(looks_like_number);
+use File::Temp qw( tempfile tempdir );
+use Text::ParseWords;
+
 
 eval "use Net::DBus;1" or my $NETDBus = "Net::DBus";
 eval "use Net::DBus::Reactor;1" or my $NETDBusReactor = "Net::DBus::Reactor";
@@ -16,7 +19,8 @@ eval "use Net::DBus::Reactor;1" or my $NETDBusReactor = "Net::DBus::Reactor";
 my %sets = (
   "send" => "textField",
   "refreshGroups" => "noArg",
-  "reinit" => "noArg"
+  "reinit" => "noArg",
+  "saveContacts" => "noArg"
  );
 
 my $sep="##"; #Seperator used for splitting message content passed from Child to Parent
@@ -78,6 +82,9 @@ sub Signalbot_Set($@) {					#
 		my @groups = ();
 		my @attachments = ();
 		my $message = "";
+		#To allow spaces in strings, join string and split it with parse_line that will honor spaces embedded by double quotes
+		my $fullstring=join(" ",@args);
+		my @args=parse_line(' ',0,$fullstring);
 
 		while(my $curr_arg = shift @args){
 			if($curr_arg =~ /^\@(.*)$/){
@@ -95,6 +102,17 @@ sub Signalbot_Set($@) {					#
 		my $defaultPeer=AttrVal($hash->{NAME},"defaultPeer",undef);
 		return "Not enough arguments. Specify a Recipient, a GroupId or set the defaultPeer attribute" if( (int(@recipients) == 0) && (int(@groups) == 0) && (!defined $defaultPeer) );
 
+		#Check for embedded fhem/perl commands
+		my $err;
+		($err, @recipients) = SignalBot_replaceCommands($hash,@recipients);
+		if ($err) { return $err; }
+		($err, @groups) = SignalBot_replaceCommands($hash,@groups);
+		if ($err) { return $err; }
+		($err, @attachments) = SignalBot_replaceCommands($hash,@attachments);
+		if ($err) { return $err; }
+		
+		#Am Schluss eine Schleife über die Attachments und alle die mit /tmp/signalbot anfangen löschen (unlink)
+
 		if ((defined $defaultPeer) && int(@recipients) == 0 && int(@groups) == 0) {
 
 			my @peers = split(/,/,$defaultPeer);
@@ -111,47 +129,38 @@ sub Signalbot_Set($@) {					#
 		$message = join(" ", @args);
 	
 		#Send message to individuals (bulk)
-		if (int(@recipients) >0) {
+		if (@recipients > 0) {
 			my $ret=Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
 			return $ret if defined $ret;
 		}
-		if (int(@groups) > 0) {
+		if (@groups > 0) {
 		#Send message to groups (one at time)
 			while(my $currgroup = shift @groups){
-				my $ret=Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);	
+				my $ret=Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);
 				return $ret if defined $ret;
 			}
 		}
-
-
-=pod
-		
-		my $recipient=shift @args;
-		my $attachment="";
-		if ($cmd eq "sendAttachment") { 
-			return "Not enough arguments for $cmd" if ($numberOfArgs<4);
-			$attachment=shift @args; 
+		#Remove the tempfiles
+		foreach my $file (@attachments) {
+			if ($file =~ /tmp\/signalbot/) {
+				unlink $file;
+			}
 		}
-		my $message="";
-		foreach(@args) { $message.=$_." ";
-		}
-	   Log3 $hash->{NAME}, 5, "sendMessage to $recipient:$attachment:".$message;
-	   #Groups are marked with hashtags
-	   if ( $recipient =~ /^#/ ) {
-	   	my $ret=Signalbot_sendGroupMessage($hash,$recipient,$attachment,$message);
-		return $ret;
-	   } else {
-		my $ret=Signalbot_sendMessage($hash,$recipient,$attachment,$message);
-		return $ret;
-	   }
-=cut
 	} elsif ( $cmd eq "reinit") {
 		Signalbot_setup($hash);
-	} elsif ( $cmd eq "setContactName") {
-		my $recipient=shift @args;
-		my $alias=shift @args;
-	   Log3 $hash->{NAME}, 5, "sendContactName $recipient:$alias";
-	   #Signalbot_sendGroupMessage($hash,$recipient,$attachment,$message);
+	} elsif ( $cmd eq "saveContacts") {
+		Log3 $hash->{NAME}, 5, "saveContacts to reading";  
+		my $contacts=$hash->{helper}{contacts};
+		my $clist="";
+		my $first=1;
+		if (defined $contacts) {
+			foreach my $key (keys %{$contacts}) {
+				my $val=$contacts->{$key};
+				if ($first) { $first=0; } else { $clist.=","; }
+				$clist.="$key=$val";
+			}
+			readingsSingleUpdate($hash, 'contactList', $clist,0);
+		}
 	}
   	return undef;
 }
@@ -335,6 +344,16 @@ sub Signalbot_setup($@){
 	Log3 $name, 5, "$name: Initializing Dbus with filehandle $fds";
 	$hash->{FD}=$fds;
     $selectlist{"$name.dbus"} = $hash;
+	
+	#Restore contactlist into internal hash
+	my $clist=ReadingsVal($hash->{NAME}, "contactList",undef);
+	if (defined $clist) {
+		my @contacts=split(",",$clist);
+		foreach my $val (@contacts) {
+			my ($k,$v) = split ("=",$val);
+			$hash->{helper}{contacts}{$k}=$v;
+		}
+	}
 }
 
 sub Signalbot_Read($@){
@@ -384,6 +403,9 @@ sub Signalbot_translateContact($@) {
 sub Signalbot_translateGroup($@) {
     my ($hash, $groupID) = @_;
 	my $groups=$hash->{helper}{groups};
+	
+	#Don't try to translate empty groupname
+	if ($groupID eq "") { return ""; }
 	
 	foreach my $key (keys %{$groups}) {
 		my $val=$groups->{$key};
@@ -597,7 +619,7 @@ sub Signalbot_Catch($) {
 ################################### 
 sub Signalbot_State($$$$) {			#reload readings at FHEM start
 	my ($hash, $tim, $sname, $sval) = @_;
-	#No persistant data needed, using only attributes
+
 	return undef;
 }
 ################################### 
@@ -606,6 +628,113 @@ sub Signalbot_Undef($$) {				#
 	Signalbot_disconnect($hash);
 	RemoveInternalTimer($hash) if ( defined (AttrVal($hash->{NAME}, "poll_interval", undef)) ); 
 	return undef;
+}
+
+#Any part of the message can contain FHEM or {perl} commands that get executed here
+#This is marked by being in (brackets) - returned is the result (without brackets)
+#If its a media stream, a file is being created and the temporary filename (delete later!) is returned
+#Question: more complex commands could contain spaces but that will require more complex parsing
+
+sub SignalBot_replaceCommands(@) {
+	my ($hash, @data) = @_;
+	
+	my @processed=();
+	
+	foreach my $string (@data) {
+		#Commands need to be enclosed in brackets
+		if ($string =~ /^\((.*)\)$/) {
+			$string=$1; #without brackets
+			my %dummy; 
+			my ($err, @newargs) = ReplaceSetMagic(\%dummy, 0, ( $string ) );
+			my $msg="";
+			if ( $err ) {
+				Log3 $hash->{NAME}, 1, $hash->{NAME}.": parse cmd failed on ReplaceSetmagic with :$err: on  :$string:";
+			} else {
+				$msg = join(" ", @newargs);
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd returned :$msg:";
+			}
+			$msg = AnalyzeCommandChain( $hash, $msg );
+			#If a normal FHEM command (no return value) is executed, $msg is undef - just the to empty string then
+			if (!defined $msg) { 
+				$msg=""; 
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": commands executed without return value";
+			}
+			#Only way to distinguish a real error with the return stream
+			if ($msg =~ /^Unknown command/) { 
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": Error message: ".$msg;
+				return ($msg, @processed); 
+			}
+			
+			my ( $isMediaStream, $type ) = SignalBot_IdentifyStream( $hash, $msg ) if ( defined( $msg ) );
+			if ($isMediaStream<0) {
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": Media stream found $isMediaStream $type";
+				my $tmpfilename="/tmp/signalbot".gettimeofday().".".$type;
+				my $fh;
+				#tempfile() would be the better way, but is not readable by signal-cli (how to set world-readable?)
+				#my ($fh, $tmpfilename) = tempfile();
+				if(!open($fh, ">", $tmpfilename,)) {
+				#if (!defined $fh) {
+					Log3 $hash->{NAME}, 1, $hash->{NAME}.": Can't write $tmpfilename";
+					#return undef since this is a fatal error 
+					return ("Can't write $tmpfilename",@processed);
+				}
+				print $fh $msg;
+				close($fh);
+				#If we created a file return the filename instead
+				push @processed, $tmpfilename;
+			} else {
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": normal text found:$msg";
+				#No mediastream - return what it was
+				push @processed, $msg;
+			}
+		} else {
+			#Not even in brackets, return as is
+			push @processed, $string;
+		}
+		
+	}
+	
+	return (undef,@processed);
+}
+
+
+######################################
+#  Get a string and identify possible media streams
+#  Copied from Telegrambot
+#  PNG is tested
+#  returns 
+#   -1 for image
+#   -2 for Audio
+#   -3 for other media
+# and extension without dot as 2nd list element
+
+sub SignalBot_IdentifyStream($$) {
+  my ($hash, $msg) = @_;
+
+  # signatures for media files are documented here --> https://en.wikipedia.org/wiki/List_of_file_signatures
+  # seems sometimes more correct: https://wangrui.wordpress.com/2007/06/19/file-signatures-table/
+  return (-1,"png") if ( $msg =~ /^\x89PNG\r\n\x1a\n/ );    # PNG
+  return (-1,"jpg") if ( $msg =~ /^\xFF\xD8\xFF/ );    # JPG not necessarily complete, but should be fine here
+  
+  return (-2 ,"mp3") if ( $msg =~ /^\xFF\xF3/ );    # MP3    MPEG-1 Layer 3 file without an ID3 tag or with an ID3v1 tag
+  return (-2 ,"mp3") if ( $msg =~ /^\xFF\xFB/ );    # MP3    MPEG-1 Layer 3 file without an ID3 tag or with an ID3v1 tag
+  
+  # MP3    MPEG-1 Layer 3 file with an ID3v2 tag 
+  #   starts with ID3 then version (most popular 03, new 04 seldom used, old 01 and 02) ==> Only 2,3 and 4 are tested currently
+  return (-2 ,"mp3") if ( $msg =~ /^ID3\x03/ );    
+  return (-2 ,"mp3") if ( $msg =~ /^ID3\x04/ );    
+  return (-2 ,"mp3") if ( $msg =~ /^ID3\x02/ );    
+
+  return (-3,"pdf") if ( $msg =~ /^%PDF/ );    # PDF document
+  return (-3,"docx") if ( $msg =~ /^PK\x03\x04/ );    # Office new
+  return (-3,"docx") if ( $msg =~ /^PK\x05\x06/ );    # Office new
+  return (-3,"docx") if ( $msg =~ /^PK\x07\x08/ );    # Office new
+  return (-3,"doc") if ( $msg =~ /^\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1/ );    # Office old - D0 CF 11 E0 A1 B1 1A E1
+
+  return (-4,"mp4") if ( $msg =~ /^....\x66\x74\x79\x70\x69\x73\x6F\x6D/ );    # MP4 according to Wikipedia
+  return (-4,"mpg") if ( $msg =~ /^\x00\x00\x01[\xB3\xBA]/ );    # MPG according to Wikipedia
+  
+  return (0,"txt");
 }
 
 1;

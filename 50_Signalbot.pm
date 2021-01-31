@@ -74,7 +74,7 @@ sub Signalbot_Set($@) {					#
 
 	if ( $cmd eq "refreshGroups") {
 		#Gruppen neu einlesen
-		Signalbot_Refreshgroups($hash);
+		Signalbot_Refreshgroups($hash) if ($init_done);
 		return undef;
 	} elsif ( $cmd eq "send") {
 		return "Usage: set ".$hash->{NAME}." send [@<Recipient1> ... @<RecipientN>] [#<GroupId1> ... #<GroupIdN>] [&<Attachment1> ... &<AttachmentN>] [<Text>]" if ( int(@args)==0); 
@@ -428,7 +428,7 @@ sub Signalbot_translateGroup($@) {
 		return $key if $val eq $groupID;		
     }
 	#Group not found, so check if we simply don't know it yet
-	Signalbot_Refreshgroups($hash);
+	Signalbot_Refreshgroups($hash) if ($init_done);
 	#And try again
 	$groups=$hash->{helper}{groups};
 	foreach my $key (keys %{$groups}) {
@@ -459,7 +459,6 @@ sub Signalbot_getNumber($@) {
 
 sub Signalbot_Refreshgroups($@) {
     my ( $hash ) = @_;
-
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;
 
@@ -505,19 +504,17 @@ sub Signalbot_sendGroupMessage($@) {
 
 	$rec=~s/#//g;
 	my @recipient= split(/,/,$rec);
-	if (scalar(@recipient)>1) { return "Can only send to one group at once";}
+	if (@recipient>1) { return "Can only send to one group at once";}
 	my @attach=split(/,/,$att);
 	my @arr="";
 	my $group=$hash->{helper}{groups}{$rec};
-	if (defined($group)) {
-		@arr=split(" ",$group);
-	} else {
+	if (!defined($group)) {
 		#Check if we need to cache a new group
-		Signalbot_Refreshgroups($@);
+		Signalbot_Refreshgroups($hash);
 		$group=$hash->{helper}{groups}{$rec};
 		return "Unknown group ".$_." please check or refresh group list" unless defined $group;
 	}
-
+	@arr=split(" ",$group);
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;	
 
@@ -691,6 +688,7 @@ sub SignalBot_replaceCommands(@) {
 				my $tmpfilename="/tmp/signalbot".gettimeofday().".".$type;
 				my $fh;
 				#tempfile() would be the better way, but is not readable by signal-cli (how to set world-readable?)
+				#could be changed with "chmod 0666, $tmpfilename;" which should even work on Windows, but what's the point - dbus/signal-cli works on Linux only anyways
 				#my ($fh, $tmpfilename) = tempfile();
 				if(!open($fh, ">", $tmpfilename,)) {
 				#if (!defined $fh) {

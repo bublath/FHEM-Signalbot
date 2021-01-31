@@ -41,6 +41,7 @@ sub Signalbot_Initialize($) {
   $hash->{AttrList}  = 	"IODev do_not_notify:1,0 ignore:1,0 showtime:1,0 ".
 												"defaultPeer: ".
 												"poll_interval: ".
+												"allowedPeer ".
 												"$readingFnAttributes";
 }
 ################################### Todo: Set or Attribute for Mode? Other sets needed?
@@ -84,8 +85,9 @@ sub Signalbot_Set($@) {					#
 		my $message = "";
 		#To allow spaces in strings, join string and split it with parse_line that will honor spaces embedded by double quotes
 		my $fullstring=join(" ",@args);
+		Log3 $hash->{NAME}, 5 , $hash->{NAME}."Before parse:$fullstring:\n";
 		my @args=parse_line(' ',0,$fullstring);
-
+		
 		while(my $curr_arg = shift @args){
 			if($curr_arg =~ /^\@(.*)$/){
 				push(@recipients,$1);
@@ -147,7 +149,8 @@ sub Signalbot_Set($@) {					#
 			}
 		}
 	} elsif ( $cmd eq "reinit") {
-		Signalbot_setup($hash);
+		my $ret = Signalbot_setup($hash);
+		$hash->{STATE} = $ret if defined $ret;
 	} elsif ( $cmd eq "saveContacts") {
 		Log3 $hash->{NAME}, 5, "saveContacts to reading";  
 		my $contacts=$hash->{helper}{contacts};
@@ -174,16 +177,7 @@ sub Signalbot_message_callback {
 	my ($hash, $timestamp, $source, $groupID, $message, $attachments) = @_;
 
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message Callback";
-	
-	#Copy previous redings to keep history of on message
-	readingsBeginUpdate($hash);
-	readingsBulkUpdate($hash, "prevMsgTimestamp", ReadingsVal($hash->{NAME}, "msgTimestamp", undef)) if defined ReadingsVal($hash->{NAME}, "msgTimestamp", undef);
-	readingsBulkUpdate($hash, "prevMsgText", ReadingsVal($hash->{NAME}, "msgText", undef)) if defined ReadingsVal($hash->{NAME}, "msgText", undef);
-	readingsBulkUpdate($hash, "prevMsgSender", ReadingsVal($hash->{NAME}, "msgSender", undef)) if defined ReadingsVal($hash->{NAME}, "msgSender", undef);
-	readingsBulkUpdate($hash, "prevMsgGroupName", ReadingsVal($hash->{NAME}, "msgGroupName", undef)) if defined ReadingsVal($hash->{NAME}, "msgGroupName", undef);
-	readingsBulkUpdate($hash, "prevMsgGroupId", ReadingsVal($hash->{NAME}, "msgGroupId", undef)) if defined ReadingsVal($hash->{NAME}, "msgGroupId", undef);
-	readingsBulkUpdate($hash, "prevMsgAttachment", ReadingsVal($hash->{NAME}, "msgAttachment", undef)) if defined ReadingsVal($hash->{NAME}, "msgAttachment", undef);
-	readingsEndUpdate($hash, 0);
+
 
 	my @groups=@$groupID;
 	my $tmp="";
@@ -204,16 +198,36 @@ sub Signalbot_message_callback {
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.":Issue with resolving contact $source\n";
 		$sender=$source;
 	}
+	
+	my $senderRegex = quotemeta($sender);
+	#Also check the untranslated sender names in case these were used in allowedPeer instead of the real names
+	my $sourceRegex = quotemeta($source);
+	my $groupIdRegex = quotemeta($group);
+	my $allowedPeer = AttrVal($hash->{NAME},"allowedPeer",undef);
+	
+	if(!defined $allowedPeer || $allowedPeer =~ /^.*$senderRegex.*$/ || $allowedPeer =~ /^.*$sourceRegex.*$/ || ($groupIdRegex ne "" && $allowedPeer =~ /^.*$groupIdRegex.*$/)) {
+		#Copy previous redings to keep history of on message
+		readingsBeginUpdate($hash);
+		readingsBulkUpdate($hash, "prevMsgTimestamp", ReadingsVal($hash->{NAME}, "msgTimestamp", undef)) if defined ReadingsVal($hash->{NAME}, "msgTimestamp", undef);
+		readingsBulkUpdate($hash, "prevMsgText", ReadingsVal($hash->{NAME}, "msgText", undef)) if defined ReadingsVal($hash->{NAME}, "msgText", undef);
+		readingsBulkUpdate($hash, "prevMsgSender", ReadingsVal($hash->{NAME}, "msgSender", undef)) if defined ReadingsVal($hash->{NAME}, "msgSender", undef);
+		readingsBulkUpdate($hash, "prevMsgGroupName", ReadingsVal($hash->{NAME}, "msgGroupName", undef)) if defined ReadingsVal($hash->{NAME}, "msgGroupName", undef);
+		readingsBulkUpdate($hash, "prevMsgGroupId", ReadingsVal($hash->{NAME}, "msgGroupId", undef)) if defined ReadingsVal($hash->{NAME}, "msgGroupId", undef);
+		readingsBulkUpdate($hash, "prevMsgAttachment", ReadingsVal($hash->{NAME}, "msgAttachment", undef)) if defined ReadingsVal($hash->{NAME}, "msgAttachment", undef);
+		readingsEndUpdate($hash, 0);
 
-	readingsBeginUpdate($hash);
-	readingsBulkUpdate($hash, "msgAttachment", trim($tmp));
-	readingsBulkUpdate($hash, "msgTimestamp", strftime("%d-%m-%Y %H:%M:%S", localtime($timestamp/1000)));
-	readingsBulkUpdate($hash, "msgText", $message);
-	readingsBulkUpdate($hash, "msgSender", $sender);
-	readingsBulkUpdate($hash, "msgGroupName", $group);
-	readingsEndUpdate($hash, 1);
+		readingsBeginUpdate($hash);
+		readingsBulkUpdate($hash, "msgAttachment", trim($tmp));
+		readingsBulkUpdate($hash, "msgTimestamp", strftime("%d-%m-%Y %H:%M:%S", localtime($timestamp/1000)));
+		readingsBulkUpdate($hash, "msgText", $message);
+		readingsBulkUpdate($hash, "msgSender", $sender);
+		readingsBulkUpdate($hash, "msgGroupName", $group);
+		readingsEndUpdate($hash, 1);
 
-	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message from $sender : $message processed";
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message from $sender : $message processed";
+	} else {
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message from $sender : $message ignored due to allowedPeer";
+	}
 }
 
 sub Signalbot_receipt_callback {
@@ -344,6 +358,7 @@ sub Signalbot_setup($@){
 	Log3 $name, 5, "$name: Initializing Dbus with filehandle $fds";
 	$hash->{FD}=$fds;
     $selectlist{"$name.dbus"} = $hash;
+	$hash->{STATE}="Connected";
 	
 	#Restore contactlist into internal hash
 	my $clist=ReadingsVal($hash->{NAME}, "contactList",undef);
@@ -354,6 +369,7 @@ sub Signalbot_setup($@){
 			$hash->{helper}{contacts}{$k}=$v;
 		}
 	}
+	return undef;
 }
 
 sub Signalbot_Read($@){
@@ -539,6 +555,9 @@ sub Signalbot_Attr(@) {					#
     } else {
       RemoveInternalTimer($hash);
     }
+  }	elsif($attr eq "allowedPeer") {
+	#Take over as is
+	return undef;
   }
 
   #check for correct values while setting so we need no error handling later
@@ -600,7 +619,8 @@ sub Signalbot_Init($$) {				#
 	}
 
 	Signalbot_Set($hash, $name, "setfromreading");
-	Signalbot_setup($hash);
+	my $ret = Signalbot_setup($hash);
+	$hash->{STATE} = $ret if defined $ret;
 	RemoveInternalTimer($hash);
 	my $pollInterval = AttrVal($hash->{NAME}, 'poll_interval', 0)*60;
 	InternalTimer(gettimeofday() + 1, 'Signalbot_Execute', $hash, 0) if ($pollInterval > 0);
@@ -826,9 +846,16 @@ sub SignalBot_IdentifyStream($$) {
 	<ul>
 		<br>
 		<li>poll_interval<br>
+		<a name="poll_interval"></a>
 			Set the polling interval in minutes to query new messages<br>
 			Typically not required, since the module gets notified when new messages arrive.<br>
 			Default: -, valid values: decimal number<br>
+		</li>
+		<li><i>allowedPeer</i><br>
+		<a name="allowedPeer"></a>
+			Comma separated list of recipient(s) and/or groupId(s), allowed to
+			update the msg.* readings and trigger new events when receiving a new message.
+			<b>If the attribute is not defined, everyone is able to trigger new events!!</b>
 		</li>
 		<br>
 		<li><a href="#ignore">ignore</a></li>

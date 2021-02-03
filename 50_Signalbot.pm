@@ -11,7 +11,7 @@ use Net::DBus::Reactor;
 use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
-
+use Encode;
 
 eval "use Net::DBus;1" or my $NETDBus = "Net::DBus";
 eval "use Net::DBus::Reactor;1" or my $NETDBusReactor = "Net::DBus::Reactor";
@@ -42,6 +42,8 @@ sub Signalbot_Initialize($) {
 												"defaultPeer: ".
 												"poll_interval: ".
 												"allowedPeer ".
+												"babblePeer ".
+												"babbleDev ".
 												"$readingFnAttributes";
 }
 ################################### Todo: Set or Attribute for Mode? Other sets needed?
@@ -85,12 +87,15 @@ sub Signalbot_Set($@) {					#
 		my $message = "";
 		#To allow spaces in strings, join string and split it with parse_line that will honor spaces embedded by double quotes
 		my $fullstring=join(" ",@args);
-		Log3 $hash->{NAME}, 5 , $hash->{NAME}."Before parse:$fullstring:\n";
+		$fullstring=decode_utf8($fullstring);
+		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:\n";
 		my @args=parse_line(' ',0,$fullstring);
 		
 		while(my $curr_arg = shift @args){
-			if($curr_arg =~ /^\@(.*)$/){
+			if($curr_arg =~ /^\@([^#].*)$/){	#Compatbility with SiSi - also allow @# as groupname
 				push(@recipients,$1);
+			}elsif($curr_arg =~ /^\@#(.*)$/){ 	#Compatbility with SiSi - also allow @# as groupname
+				push(@groups,$1);
 			}elsif($curr_arg =~ /^#(.*)$/){
 				push(@groups,$1);
 			}elsif($curr_arg =~ /^\&(.*)$/){
@@ -224,6 +229,22 @@ sub Signalbot_message_callback {
 		readingsBulkUpdate($hash, "msgGroupName", $group);
 		readingsEndUpdate($hash, 1);
 
+		my $bDevice=AttrVal($hash->{NAME},"babbleDev",undef);
+		my $bPeer=AttrVal($hash->{NAME},"babblePeer",undef);
+		
+		#Just pick one sender in den Priority: group, named contact, number, babblePeer
+		my $replyPeer=$bPeer;
+		$replyPeer=$sourceRegex unless defined $sourceRegex;
+		$replyPeer=$senderRegex unless defined $senderRegex;		
+		$replyPeer=$groupIdRegex unless defined $groupIdRegex;		
+		
+		#Activate Babble integration, only if sender or sender group is in babblePeer 
+		if (defined $bDevice && defined $bPeer) {
+			if ($bPeer =~ /^.*$senderRegex.*$/ || $bPeer =~ /^.*$sourceRegex.*$/ || ($groupIdRegex ne "" && $bPeer =~ /^.*$groupIdRegex.*$/)) {
+				Babble_DoIt($bDevice,$message,$replyPeer);
+				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Babble called for $message ($replyPeer)";
+			}
+		}
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message from $sender : $message processed";
 	} else {
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message from $sender : $message ignored due to allowedPeer";
@@ -555,8 +576,15 @@ sub Signalbot_Attr(@) {					#
   }	elsif($attr eq "allowedPeer") {
 	#Take over as is
 	return undef;
+  } elsif($attr eq "babblePeer") {
+	#Take over as is
+	return undef;
+  } elsif($attr eq "babbleDev") {
+	my $bhash = $defs{$val};
+	return "Can't find device $val" unless defined $bhash;
+	return "Not a Babble device $val" unless $bhash->{TYPE} eq "Babble";
+	return undef;
   }
-
   #check for correct values while setting so we need no error handling later
   foreach ('xx', 'yy') {
 	if ($attr eq $_) {
@@ -643,6 +671,7 @@ sub Signalbot_State($$$$) {			#reload readings at FHEM start
 sub Signalbot_Undef($$) {				#
 	my ($hash, $name) = @_;
 	Signalbot_disconnect($hash);
+	$hash->{STATE}="Disconnected";
 	RemoveInternalTimer($hash) if ( defined (AttrVal($hash->{NAME}, "poll_interval", undef)) ); 
 	return undef;
 }

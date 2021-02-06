@@ -1,5 +1,8 @@
 #!/bin/bash
-
+SCRIPTVERSION="$Id:1.0$"
+# Author: Adimarantis
+# License: GPL
+#Install script for signal-cli 
 PHONE="+49xxxxx"
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
@@ -24,8 +27,12 @@ else
 fi
 
 if grep -q docker /proc/1/cgroup; then 
-   echo "You seem to run in a docker environment. This installation needs to run on the host machine (FHEM can be in a container later)"
-   exit
+   echo "You seem to run in a docker environment. Warning: This is experimental"
+   if [ "$USER" ne "root" ]; then
+		echo "Docker Installation needs to run under root"
+		exit
+	fi
+   DOCKER=yes
 fi
 
 echo "This script will help you to install signal-cli as system dbus service"
@@ -131,7 +138,7 @@ check_and_compare_file() {
 
 ARCH=`arch`
 OSNAME=`uname`
-RASPI=0
+RASPI=""
 
 if [ $OSNAME != "Linux" ]; then
 	echo "Only Linux systems are supported (you: $OSNAME), quitting"
@@ -164,8 +171,14 @@ check_and_create_path $LIBPATH
 check_and_create_path $DBSYSTEMD
 check_and_create_path $DBSYSTEMS
 check_and_create_path $SYSTEMD
+check_and_create_path /run/dbus
 
-
+if [ -n "$DOCKER" ]; then
+	echo -n "Running in Docker, performing apt update/upgrade..."
+	apt-get -q -y update
+	apt-get -q -y upgrade
+	echo "done"
+fi
 
 install_and_check wget wget
 install_and_check haveged haveged
@@ -176,13 +189,17 @@ install_and_check cpan cpanminus
 install_and_check qrencode qrencode
 install_and_check pkg-config pkg-config
 install_and_check gcc gcc
+install_and_check zip zip
 
 #For DBus check a number of Perl modules on file level
 install_by_file /usr/include/dbus-1.0/dbus/dbus.h libdbus-1-dev
 install_by_file /usr/share/perl5/Test/CPAN/Changes.pm libcpan-changes-perl
 install_by_file /usr/include/expat.h libexpat1-dev
 install_by_file /usr/share/doc-base/libxml-parser-perl libxml-parser-perl
-
+install_by_file /usr/share/doc/libtemplate-perl libtemplate-perl
+install_by_file /usr/share/doc/libxml-xpath-perl libxml-xpath-perl
+install_by_file /usr/share/build-essential/essential-packages-list build-essential
+install_by_file /usr/share/doc/libxml-twig-perl xml-twig-tools
 
 cat >$TMPFILE <<EOF
 #!/usr/bin/perl -w
@@ -197,7 +214,7 @@ echo -n "Checking for Net::DBus..."
 NETDBUS=`perl $TMPFILE`
 
 if [ "$NETDBUS" = "$DBVER" ]; then
-	echo "V$NETBUS found"
+	echo "V$NETDBUS found"
 else
 	export PERL_MM_USE_DEFAULT=1
 	echo -n "Installing latest NET::DBus..."
@@ -256,10 +273,13 @@ if [ $NEEDINSTALL = 1 ]; then
 		echo "Unpacking ..."
 		cd $SIGNALPATH
 		tar xf /tmp/signal-cli-$SIGNALVERSION.tar.gz
+		rm -rf signal
+		mv "signal-cli-$SIGNALVERSION" signal
 		if [ -n "$RASPI" ]; then
 			echo -n "Removing native x86 since you're on Raspberry..."
 			zip -d $SIGNALPATH/signal/lib/zkgroup-java-*.jar libzkgroup.so
-			zip -d $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
+			#Disable for now since that is only required for 0.7.5+
+			#zip -d $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
 			echo "done"
 			echo "Downloading native armv71 libraries..."
 			cd /tmp
@@ -268,8 +288,6 @@ if [ $NEEDINSTALL = 1 ]; then
 			mv libsignal_jni.so libzkgroup.so $LIBDIR
 			echo "done"
 		fi
-		rm -rf signal
-		mv "signal-cli-$SIGNALVERSION" signal
 		echo "done"
 		echo -n "Changing file ownership ..."
 		echo "done"
@@ -288,7 +306,7 @@ cat >$TMPFILE <<EOF
 	  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 	
 	<busconfig>
-	  <policy user="signal-cli">
+	  <policy user="$SIGNALUSER">
 	          <allow own="org.asamk.Signal"/>
 	          <allow send_destination="org.asamk.Signal"/>
 	          <allow receive_sender="org.asamk.Signal"/>
@@ -308,6 +326,7 @@ cat >$TMPFILE <<EOF
 [D-BUS Service]
 Name=org.asamk.Signal
 Exec=/bin/false
+User=$SIGNALUSER
 SystemdService=dbus-org.asamk.Signal.service
 EOF
 
@@ -332,13 +351,63 @@ BusName=org.asamk.Signal
 Alias=dbus-org.asamk.Signal.service
 EOF
 
-check_and_compare_file  $SYSTEMD/signal.service $TMPFILE
+if [ -z "$DOCKER" ]; then
+	#Don't do this in Docker environment
+	check_and_compare_file  $SYSTEMD/signal.service $TMPFILE
 
-#Reload config after change
-systemctl daemon-reload
-systemctl enable signal.service
-systemctl reload dbus.service
+	#Reload config after change
+	systemctl daemon-reload
+	systemctl enable signal.service
+	systemctl reload dbus.service
+
+fi
 }
+
+#stop service depeding on Docker or not
+stop_service() {
+  if [ -z "$DOCKER" ]; then
+	echo "Stopping signal-cli service"
+	sudo service signal stop
+  else
+	SIGSERVICE=`ps -eo pid,command | grep $SIGNALVAR | grep -v grep`
+	if [ -n "$SIGSERVICE" ]; then
+		echo "Stopping signal-cli daemon for Docker"
+		ARRAY=($SIGSERVICE)
+		PID=${ARRAY[0]}
+		kill $PID
+	fi
+  fi
+}
+
+#start service depending on Docker or not
+start_service() {
+	if [ -z "$DOCKER" ]; then
+		echo "Start signal-cli service"
+		sudo service signal start
+	else
+		DBDAEMON=`ps -eo command | grep dbus-daemon | grep -v grep`
+		if [ -z "$DBDAEMON" ]; then
+			echo "Starting dbus daemon for Docker"
+			dbus-daemon --system --address=unix:path=/run/dbus/system_bus_socket >/var/log/dbus.log 2>/var/log/dbus.err &
+		fi
+		SIGSERVICE=`ps -eo pid,command | grep $SIGNALVAR | grep -v grep`
+		if [ -z "$SIGSERVICE" ]; then
+			cd $SIGNALPATH/signal/bin
+			echo "Starting signal-cli daemon for Docker"
+			sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE daemon --system >/var/log/signal.log 2>/var/log/signal.err &
+		fi
+		echo -n "Waiting for signal-cli to become ready."
+		WAIT=""
+		while [ -z "$WAIT" ]
+		do
+			WAIT=`ps -eo pid,command | grep $SIGNALVAR | grep java | grep -v grep`
+			echo -n "."
+			sleep 1
+		done
+		echo "running"
+	fi
+}
+
 
 link_device() {
 cd $SIGNALPATH/signal/bin
@@ -347,14 +416,12 @@ echo
 echo "Open PNG in /tmp/qrcode.png that will appear in a couple of seconds and scan with your primary device"
 echo "Process will continue after successfully scanning qrcode and accepting link"
 echo "If you take too long, it will timeout and needs to be repeated"
-echo "Stopping Signal service to get exclusive access to configuration"
-sudo service signal stop
+stop_service
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR link -n `hostname` | xargs -L 1 qrencode -o /tmp/qrcode.png
 
 echo "Reading account data"
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR receive
-echo "Restarting signal service"
-sudo service signal start
+start_service
 echo "done"
 }
 
@@ -378,8 +445,7 @@ if [ -z "$OPTION" ]; then
 	echo "Unknown option $OPTION, exiting"
 	exit
 fi
-echo "Stopping Signal service to get exclusive access to configuration"
-sudo service signal stop
+stop_service
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE register $OPTION 2>$TMPFILE
 CAPTCHA=`cat $TMPFILE | grep Captcha`
 if [ -n "$CAPTCHA" ]; then
@@ -402,8 +468,7 @@ sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE verify $REPLY
 
 echo "checking and receiving"
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE receive
-echo "Restarting signal service"
-sudo service signal start
+start_service
 }
 
 join_group() {
@@ -411,14 +476,48 @@ echo "Please enter the uri link (created share group link, looking like https://
 echo -n "Group:"
 read REPLY
 RECIPIENT=$REPLY
-echo "Stopping Signal service to get exclusive access to configuration"
-sudo service signal stop
+stop_service
 echo "If you get a 'in use, waiting' message, then stopping of system Signal service did not succeed. Press Ctrl-C and try again"
 cd $SIGNALPATH/signal/bin
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE join --uri $RECIPIENT
-echo "Restarting signal service"
-sudo service signal start
+start_service
 echo "If the recipient got the messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
+}
+
+name_user() {
+echo "Please are name for your Signal User with number $PHONE (You have to update the name if you want to set a picture!)"
+echo -n "Name:"
+read REPLY
+NAME=$REPLY
+echo "Please provide a filename to a picture to be used as avatar for your user (press return to keep unchanged)"
+echo -n "File:"
+read REPLY
+AVATAR=`pwd`/$REPLY
+if [ -n "$AVATAR" ]; then
+	if ! [ -e "$AVATAR" ]; then
+		echo "File $AVATAR was not found"
+		return
+	fi
+fi
+	
+if [ -z "$NAME" ]; then
+	echo "Nothing to do (you need a name to change the picture)"
+	return;
+fi
+
+stop_service
+echo "If you get a 'in use, waiting' message, then stopping of system Signal service did not succeed. Press Ctrl-C and try again"
+cd $SIGNALPATH/signal/bin
+if [ -n "$AVATAR" ]; then
+	SETAVATAR="--avatar $AVATAR"
+fi
+if [ -n "$NAME" ]; then
+	sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE updateProfile --name "$NAME" $SETAVATAR
+fi
+#Make sure local config is updated
+sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE receive
+stop_service
+echo "Your profile has been updated"
 }
 
 test_device() {
@@ -427,16 +526,33 @@ echo -n "Number:"
 read REPLY
 RECIPIENT=$REPLY
 echo "Sending a message from command line to $RECIPIENT"
-echo "Stopping Signal service to get exclusive access to configuration"
-sudo service signal stop
+stop_service
 echo "If you get a 'in use, waiting' message, skip by pressing CTRL-C - this is normal when system service is already up and running"
 cd $SIGNALPATH/signal/bin
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE send -m "Test message from the command line" $RECIPIENT
-sudo service signal start
-echo "Sending a message from via dbus to $RECIPIENT"
+sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE send -m "Test message from the command line" "$RECIPIENT"
+start_service
+echo "Sending a message via dbus-send command"
 dbus-send --system --type=method_call --print-reply --dest="org.asamk.Signal" /org/asamk/Signal org.asamk.Signal.sendMessage string:"Test message via DBus" array:: string:$RECIPIENT
-echo "Restarting signal service"
-echo "If the recipient got the messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
+cat <<EOF >$TMPFILE
+#!/usr/bin/perl -w
+use strict;
+use warnings;
+
+use Net::DBus;
+
+my @attachment =();
+my @recipients=("$RECIPIENT");
+my \$bus = Net::DBus->system(); 
+
+my \$service = \$bus->get_service("org.asamk.Signal");
+my \$object = \$service->get_object("/org/asamk/Signal");
+
+my \$retcode = \$object->sendMessage("Testmessage from DBUS-Perl",\\@attachment,\\@recipients);
+print "return timestamp:".\$retcode."\n";
+EOF
+echo "Sending a message via perl Net::DBus"
+perl $TMPFILE
+echo "If the recipient got all thre messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
 }
 
 remove_all() {
@@ -475,6 +591,8 @@ if [ -z $OPERATION ]; then
 	echo "test     : run a basic test if everything is installed and registered correctly"
 	echo "remove   : Remove signal-cli and all configurations"
 	echo "join     : Join current number to an existing group (invite by group link)"
+	echo "name     : set or change Signal user name and/or avatar picture"
+	echo "start    : Start the signal-cli service (or respective docker processes)"
 	echo
 	echo "!!! Everything needs to run with sudo !!!"
 else
@@ -518,8 +636,18 @@ if [ $1 = "link" ]; then
 	link_device
 fi
 
+if [ $1 = "start" ]; then
+	start_service
+fi
+
+if [ $1 = "name" ]; then
+	name_user
+fi
+
 if [ $1 = "join" ]; then
 	join_group
 fi
+
+rm -f $TMPFILE
 
 exit

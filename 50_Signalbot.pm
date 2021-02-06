@@ -1,7 +1,10 @@
 ##############################################
-# $Id$
+# $Id:1.0$
 # Simple Interface to Signal CLI running as Dbus service
-#
+# Author: Adimarantis
+# License: GPL
+# Credits to FHEM Forum Users Quantum (SiSi Module) and Johannes Viegener (Telegrambot Module) for code fragments and ideas
+# Requires signal_cli (https://github.com/AsamK/signal-cli) and Net::DBus to work
 package main;
 
 use strict;
@@ -20,7 +23,8 @@ my %sets = (
   "send" => "textField",
   "refreshGroups" => "noArg",
   "reinit" => "noArg",
-  "saveContacts" => "noArg"
+  "saveContacts" => "noArg",
+  "setContact" => "textField"
  );
 
 my $sep="##"; #Seperator used for splitting message content passed from Child to Parent
@@ -78,6 +82,16 @@ sub Signalbot_Set($@) {					#
 		#Gruppen neu einlesen
 		Signalbot_Refreshgroups($hash) if ($init_done);
 		return undef;
+	} elsif ( $cmd eq "setContact") {
+		if (int(@args)<2 ) {
+			return "Usage: set ".$hash->{NAME}." <number> <nickname>";
+		} else {
+			my $number = shift @args;
+			my $nickname = join (" ",@args);
+			my $ret=Signalbot_setContactName($hash,$number,$nickname);
+			return $ret if defined $ret;
+		}
+		return undef;
 	} elsif ( $cmd eq "send") {
 		return "Usage: set ".$hash->{NAME}." send [@<Recipient1> ... @<RecipientN>] [#<GroupId1> ... #<GroupIdN>] [&<Attachment1> ... &<AttachmentN>] [<Text>]" if ( int(@args)==0); 
 
@@ -134,7 +148,27 @@ sub Signalbot_Set($@) {					#
 		return "Specify either a message text or an attachment" if((int(@attachments) == 0) && (int(@args) == 0));
 
 		$message = join(" ", @args);
-	
+		if (@attachments>0) {
+			#create copy in /tmp to mitigate incomplete files and relative paths in fhem
+			my @newatt;
+			foreach my $file (@attachments) {
+				if ( -e $file ) {
+					if ($file =~ /[tmp\/signalbot]/) {
+						$file =~ /^.*?\.([^.]*)?$/;
+						my $type = $1;
+						my $tmpfilename="/tmp/signalbot".gettimeofday().".".$type;
+						copy($file,$tmpfilename);
+						push @newatt, $tmpfilename;
+					} else {
+						push @newatt, $file;
+					}
+				} else {
+					return "File not found: $file";
+				}
+			}
+			@attachments=@newatt;
+		}
+
 		#Send message to individuals (bulk)
 		if (@recipients > 0) {
 			my $ret=Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
@@ -233,13 +267,13 @@ sub Signalbot_message_callback {
 		my $bPeer=AttrVal($hash->{NAME},"babblePeer",undef);
 		
 		#Just pick one sender in den Priority: group, named contact, number, babblePeer
-		my $replyPeer=$bPeer;
-		$replyPeer=$sourceRegex unless defined $sourceRegex;
-		$replyPeer=$senderRegex unless defined $senderRegex;		
-		$replyPeer=$groupIdRegex unless defined $groupIdRegex;		
+		my $replyPeer=undef;
+		$replyPeer=$sourceRegex if defined $sourceRegex;
+		$replyPeer=$senderRegex if defined $senderRegex;
+		$replyPeer="#".$groupIdRegex if defined $groupIdRegex;
 		
 		#Activate Babble integration, only if sender or sender group is in babblePeer 
-		if (defined $bDevice && defined $bPeer) {
+		if (defined $bDevice && defined $bPeer && defined $replyPeer) {
 			if ($bPeer =~ /^.*$senderRegex.*$/ || $bPeer =~ /^.*$sourceRegex.*$/ || ($groupIdRegex ne "" && $bPeer =~ /^.*$groupIdRegex.*$/)) {
 				Babble_DoIt($bDevice,$message,$replyPeer);
 				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Babble called for $message ($replyPeer)";
@@ -333,32 +367,41 @@ sub Signalbot_setup($@){
 		Signalbot_disconnect($hash);
 	}	
 	delete $hash->{helper}{contacts};
-	my $bus = Net::DBus->system;
-	return "Error getting Dbus" unless defined $bus;
-	$hash->{helper}{dbus}=$bus;
-	my $service = $bus->get_service("org.asamk.Signal");
-	return "Error getting Dbus service" unless defined $service;
-	$hash->{helper}{dservice}=$service;
-	my $object = $service->get_object("/org/asamk/Signal");
-	return "Error getting Dbus object" unless defined $object;
-	$hash->{helper}{dobject}=$object;	
-	my $reactor=Net::DBus::Reactor->main();	
-	return "Error getting Dbus reactor" unless defined $reactor;
-	$hash->{helper}{dreactor}=$reactor;
-	#Always check if callbacks are already defined to avoid getting multiple callbacks
+	my ($bus, $service, $object, $reactor);
+	eval {
+		$bus = Net::DBus->system;
+		return "Error getting Dbus" unless defined $bus;
+		$hash->{helper}{dbus}=$bus;
+		$service = $bus->get_service("org.asamk.Signal");
+		return "Error getting Dbus service" unless defined $service;
+		$hash->{helper}{dservice}=$service;
+		$object = $service->get_object("/org/asamk/Signal");
+		return "Error getting Dbus object" unless defined $object;
+		$hash->{helper}{dobject}=$object;	
+		$reactor=Net::DBus::Reactor->main();	
+		return "Error getting Dbus reactor" unless defined $reactor;
+		$hash->{helper}{dreactor}=$reactor;
+	}; 
+	if (defined $@ and $@ ne "") {
+		#invalidate so there are no additional error
+		Log3 $name, 3, $hash->{NAME}.": Error while initializing Dbus:".$@;
+		$hash->{helper}{dbus}=undef;
+		return "Exception while setting up Dbus - see syslog for details";
+	}
 
+	#Always check if callbacks are already defined to avoid getting multiple callbacks
 	$hash->{helper}{msignal} = $object->connect_to_signal("MessageReceived", 
 		sub { Signalbot_message_callback($hash,@_);} ) 
 		unless defined $hash->{helper}{msignal} ;
-	Log3 $name, 5, "Added message signal ".$hash->{helper}{msignal};
+	Log3 $name, 5, $hash->{NAME}.": Added message signal ".$hash->{helper}{msignal};
 	$hash->{helper}{ssignal} = $object->connect_to_signal("SyncMessageReceived", 
 		sub { Signalbot_sync_callback($hash,@_);} ) 
 		unless defined $hash->{helper}{ssignal} ;
-	Log3 $name, 5, "Added sync signal ".$hash->{helper}{ssignal};
+	Log3 $name, 5, $hash->{NAME}.": Added sync signal ".$hash->{helper}{ssignal};
 	$hash->{helper}{rsignal} = $object->connect_to_signal("ReceiptReceived", 
 		sub { Signalbot_receipt_callback($hash,@_);} ) 
 		unless defined $hash->{helper}{rsignal} ;
-	Log3 $name, 5, "Added receipt signal ".$hash->{helper}{rsignal};
+	Log3 $name, 5, $hash->{NAME}.": Added receipt signal ".$hash->{helper}{rsignal};
 
 	#Set a very short timer that guarantees that the $reactor->step() function still immediately returns when there is nothing to do.
 	$hash->{helper}{timer} = $reactor->add_timeout(1,
@@ -412,16 +455,41 @@ sub Signalbot_getContactName($@) {
 	my $contact=$hash->{helper}{contacts}{$number};
 
 	#if not found, ask Signal
-	if (!defined $contact) {
+	if (!defined $contact || $contact eq "") {
 		my $object=$hash->{helper}{dobject};
 		return "Dbus not initialized" unless defined $object;
 		eval {
-			$contact = $object->getContactName($number);	
-		}; return $@ unless defined $@;
+			$contact = $object->getContactName($number);
+		}; 
+		if (defined $@  && $@ ne "") { return $@ };
 		#Add to internal inventory
 		$hash->{helper}{contacts}{$number}=$contact;
 	}
+	if ($contact eq "") {return $number;}
 	return $contact;
+}
+
+sub Signalbot_setContactName($@) {
+    my ( $hash,$number,$name) = @_;
+
+	if (!defined $number || !defined $name || $number eq "" || $name eq "") {
+		return "setContactName: Number and Name required";
+	}
+	if ($number =~ /^[^\+].*/) {
+		return "setContactName: Invalid number";
+	}
+
+	my $object=$hash->{helper}{dobject};
+	return "Dbus not initialized" unless defined $object;
+	eval {
+		my $ret = $object->setContactName($number,$name);
+	}; 
+	if (defined $@ && $@ ne "") {
+		return $@;
+	}
+	#Add to internal inventory as well
+	$hash->{helper}{contacts}{$number}=$name;
+	return undef;
 }
 
 sub Signalbot_translateContact($@) {
@@ -514,7 +582,7 @@ sub Signalbot_sendMessage($@) {
     eval { $object->sendMessage($mes,\@attach,\@recipient); };
 	return "Error sending message:".$@ if $@;
 	readingsBeginUpdate($hash);
-	readingsBulkUpdate($hash, "sentMsg", $mes);
+	readingsBulkUpdate($hash, "sentMsg", encode_utf8($mes));
 	readingsBulkUpdate($hash, 'sentMsgTimestamp', "pending");
 	readingsEndUpdate($hash, 0);
 }
@@ -578,10 +646,19 @@ sub Signalbot_Attr(@) {					#
 	return undef;
   } elsif($attr eq "babblePeer") {
 	#Take over as is
+	my $bDevice=AttrVal($hash->{NAME},"babbleDev",undef);
+	if (!defined $bDevice) {
+		foreach my $dev ( sort keys %main::defs ) {
+			if ($defs{$dev}->{TYPE} eq "Babble") {
+				CommandAttr(undef,"$name babbleDev $dev");
+				last;
+			}
+		}
+	}
 	return undef;
   } elsif($attr eq "babbleDev") {
+	return undef unless (defined $val && $val ne "");
 	my $bhash = $defs{$val};
-	return "Can't find device $val" unless defined $bhash;
 	return "Not a Babble device $val" unless $bhash->{TYPE} eq "Babble";
 	return undef;
   }
@@ -608,14 +685,14 @@ sub Signalbot_Notify($$) {
   my $events = deviceEvents($dev_hash,1);
   
   if ($devName eq "global" and grep(m/^INITIALIZED|REREADCFG$/, @{$events})) {
-	  Signalbot_Init($own_hash,());
+	  Signalbot_Init($own_hash,"");
   }
 }
 
 ################################### 
 sub Signalbot_Define($$) {			#
 	my ($hash, $def) = @_;
-
+	Log3 $hash->{NAME}, 5, $hash->{NAME}." Define: $def";
 	return "Error while loading $NETDBus. Please install $NETDBus" if $NETDBus;
 	return "Error while loading $NETDBusReactor. Please install $NETDBusReactor" if $NETDBusReactor;
 
@@ -625,20 +702,22 @@ sub Signalbot_Define($$) {			#
 	}
 	
 	$hash->{NOTIFYDEV} = "global";
- 
-	my @a = split("[ \t]+", $def);
 		if ($init_done) {
-			eval { Signalbot_Init( $hash, [ @a[ 2 .. scalar(@a) - 1 ] ] ); };
-		return Signalbot_Catch($@) if $@;
+			Log3 $hash->{NAME}, 5, "Define init_done: $def";
+			my $ret=Signalbot_Init( $hash, $def );
+			return $ret if $ret;
 	}
 	return undef;
 }
 ################################### 
 sub Signalbot_Init($$) {				#
 	my ( $hash, $args ) = @_;
-	#my @a = split("[ \t]+", $args);
+	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Init: $args";
+	my @a = ();
+	@a = split("[ \t]+", $args) if defined $args;
+	shift @a;shift @a;
 	my $name = $hash->{NAME};
-	if (defined $args && int(@$args) != 0)	{
+	if (defined $args && int(@a) > 0)	{
 		return "Define: Wrong syntax. Usage:\n" .
 		       "define <name> Signalbot";
 	}
@@ -646,6 +725,7 @@ sub Signalbot_Init($$) {				#
 	Signalbot_Set($hash, $name, "setfromreading");
 	my $ret = Signalbot_setup($hash);
 	$hash->{STATE} = $ret if defined $ret;
+	return $ret if defined $ret;
 	RemoveInternalTimer($hash);
 	my $pollInterval = AttrVal($hash->{NAME}, 'poll_interval', 0)*60;
 	InternalTimer(gettimeofday() + 1, 'Signalbot_Execute', $hash, 0) if ($pollInterval > 0);
@@ -797,26 +877,19 @@ sub SignalBot_IdentifyStream($$) {
 
 <a name="Signalbot"></a>
 <h3>Signalbot</h3>
-(en | <a href="commandref_DE.html#Signalbot">de</a>)
+For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki</a>
 <ul>
 	<a name="Signalbot"></a>
 		provides an interface to the Signal Messenger, via signal_cli running as dbus daemon<br>
 		The signal_cli package needs to be installed. See github for installation details on <a href="https://github.com/AsamK/signal-cli">signal-cli</a><br>
-		Refer to this documentation on how to setup signal-cli in dbus daemon mode <a href="https://knx-user-forum.de/forum/supportforen/openhab/1139194-whisper-systems-signal-messenger-client-einrichten">only in german</a><br>
+		An install script is available in the <a href="https://forum.fhem.de/index.php/topic,118370.0.html">FHEM forum</a><br>
 		<br><br>
 		Supported functionality (mainly due to limitations of the signal-cli dbus interface:<br>
 		<ul>
 		<li>Send messages to individuals and/or groups with or without attachments</li>
 		<li>Retrieve the list of joined groups in order to allow using group names when sending (automatically done when encountering an unknown group)</li>
-		<br><b>What is the difference to the already existing SiSi:</b><br><br>
-		<li>Works without forking a new thread, thus saving a lot of memory</li>
-		<li>Groups are always translated to names instead of cryptic base64 encoding</li>
-		<li>Contact name can be used if known. Names will be discovered when getting messages or initially sending to the phone number</li>
-		<li>Interpretation FHEM/Perl round brackets () as commands which result can we used to dynamically create text or get streams for attachments e.g. SVG plots like in TelegramBot>/li>
 		<b>Limitations:</b><br>
-		<li>The whole setup, registration and eving joining groups has to be done from signal-cli since a lot of functionality is not supported (yet) via the Dbus interface</li>
-		<li>Contacts need to be discovered and cannot be loaded (limitation of signal-cli), but existing list can be saved to a reading</li>
-		<br>
+		<li>The whole setup, registration and eving joining groups has to be done from signal-cli since a lot of functionality is not supported (yet) via the Dbus interface. The install shell script is however guiding through this process.</li>
 		<br>
 		</ul>
 	<a name="SignalbotDefine"></a><br>
@@ -836,6 +909,7 @@ sub SignalBot_IdentifyStream($$) {
 			<li>Use round brackets to let FHEM execute the content (e.g <code>&({plotAsPng('SVG_Temperatures')}</code></li>
 			<li>If a recipient, group or attachment contains white spaces, the whole expression (including @ # or &) needs to be put in double quotes. Escape quotes with \"</li>
 			<li>If the round brackets contain curly brackets to execute Perl commands, two semi-colons (;;) need to be used to seperate multiple commands and at the end</li>
+			<li>For compatibility reasons @# can also be used to mark group names</li>
 			</ul>
 		</li>
 		<li>Note:<br>
@@ -843,8 +917,7 @@ sub SignalBot_IdentifyStream($$) {
 			<ul>
 			<li>Messages to multiple recipients will be sent as one message</li>
 			<li>Messages to multiple groups or mixed with individual recipients will be sent in multiple messages</li>
-			<li>Note the difference to SiSi: Groups are only marked with "#" and have to be real group names (like shown in the app)</li>
-			<li>Attachments need to containt valid pathnames readable for the fhem user</li>
+			<li>Attachments need to be file names readable for the fhem user with absolute path or relative to fhem user home</li>
 			<li>Recipients can be either contact names or phone numbers (starting with +). Since signal-cli only understand phone numbers, 
 			Signalbot tries to translate known contact names from its cache and might fail to send the message if unable to decode the contact<br>
 			<br>
@@ -860,6 +933,10 @@ sub SignalBot_IdentifyStream($$) {
 		<li><b>set saveContacts</b><br>
 		<a name="saveContacts"></a>
 		Save the internal list of discovered contact name to phone number conversions into the reading "contactList"<br>
+		</li>
+		<li><b>set setContact &ltnumber&gt &ltname&gt</b><br>
+		<a name="setContact"></a>
+		Define a nickname for a phone number to be used with the send command and in readings<br>
 		</li>
 		<li><b>set reinit</b><br>
 		<a name="reinit"></a>
@@ -915,41 +992,5 @@ sub SignalBot_IdentifyStream($$) {
 </ul>
 
 =end html
-
-=begin html_DE
-
-<a name="Signalbot"></a>
-<h3>Signalbot</h3>
-(<a href="commandref.html#Signalbot">en</a> | de)
-<ul>
-	<a name="Signalbot"></a>
-		Bitte englische Dokumentation verwenden.</b><br>
-	<a name="SignalbotDefine"></a><br>
-	<b>Define</b>
-	<ul>
-		<code>define &lt;name&gt; Signalbot</code><br>
-		Alles weitere wird über Attribute definiert.<br>
-	</ul>
-
-	<a name="SignalbotSet"></a>
-	<b>Set</b>
-	<ul>
-	</ul>
-
-	<a name="SignalbotAttr"></a>
-	<b>Attribute</b>
-	<ul>
-		<li>poll_interval<br>
-			Aktualisierungsintervall aller Werte in Minuten.<br>
-			Standard: -, g&uuml;ltige Werte: Dezimalzahl<br><br>
-		</li>
-		<li><a href="#ignore">ignore</a></li>
-		<li><a href="#do_not_notify">do_not_notify</a></li>
-		<li><a href="#showtime">showtime</a></li>
-	</ul>
-	<br>
-</ul>
-
-=end html_DE
 
 =cut

@@ -171,6 +171,7 @@ fi
 check_and_create_path $LIBPATH
 check_and_create_path /etc/dbus-1
 check_and_create_path $DBSYSTEMD
+check_and_create_path /usr/share/dbus-1/
 check_and_create_path $DBSYSTEMS
 check_and_create_path $SYSTEMD
 check_and_create_path /run/dbus

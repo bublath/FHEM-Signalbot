@@ -28,7 +28,7 @@ fi
 
 if grep -q docker /proc/1/cgroup; then 
    echo "You seem to run in a docker environment. Warning: This is experimental"
-   if [ "$USER" ne "root" ]; then
+   if [ "$USER" != "root" ]; then
 		echo "Docker Installation needs to run under root"
 		exit
 	fi
@@ -168,6 +168,7 @@ if [ -z "$APT" ]; then
 fi
 
 check_and_create_path $LIBPATH
+check_and_create_path /etc/dbus-1
 check_and_create_path $DBSYSTEMD
 check_and_create_path $DBSYSTEMS
 check_and_create_path $SYSTEMD

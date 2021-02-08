@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:1.0$"
+SCRIPTVERSION="$Id:1.2$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -145,7 +145,7 @@ if [ $OSNAME != "Linux" ]; then
 	exit
 fi
 
-if [ "$ID" = "raspbian" ] || [ "$ID" = "Raspian" ] || [ "$ARCH" = "armv71" ]; then
+if [ "$ID" = "raspbian" ] || [ "$ID" = "Raspian" ] || [ "$ARCH" = "armv7l" ]; then
 	echo "You seem to be on a Raspberry pi with $ARCH"
 	RASPI=1
 else 
@@ -190,6 +190,12 @@ install_and_check qrencode qrencode
 install_and_check pkg-config pkg-config
 install_and_check gcc gcc
 install_and_check zip zip
+if [ -z "$BASH" ]; then
+	echo "This script requires bash for some functions. Check if bash is installed."
+	install_and_check bash bash
+	echo "Please re-run using bash"
+	exit
+fi
 
 #For DBus check a number of Perl modules on file level
 install_by_file /usr/include/dbus-1.0/dbus/dbus.h libdbus-1-dev
@@ -200,6 +206,7 @@ install_by_file /usr/share/doc/libtemplate-perl libtemplate-perl
 install_by_file /usr/share/doc/libxml-xpath-perl libxml-xpath-perl
 install_by_file /usr/share/build-essential/essential-packages-list build-essential
 install_by_file /usr/share/doc/libxml-twig-perl xml-twig-tools
+install_by_file /usr/share/doc/libimage-librsvg-perl libimage-librsvg-perl
 
 cat >$TMPFILE <<EOF
 #!/usr/bin/perl -w
@@ -281,11 +288,11 @@ if [ $NEEDINSTALL = 1 ]; then
 			#Disable for now since that is only required for 0.7.5+
 			#zip -d $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
 			echo "done"
-			echo "Downloading native armv71 libraries..."
+			echo "Downloading native armv7l libraries..."
 			cd /tmp
 			rm -rf libsignal_jni.so libzkgroup.so
 			wget -qN http://bublath.de/signal/libsignal_jni.so http://bublath.de/signal/libzkgroup.so
-			mv libsignal_jni.so libzkgroup.so $LIBDIR
+			mv libsignal_jni.so libzkgroup.so $LIBPATH
 			echo "done"
 		fi
 		echo "done"
@@ -559,6 +566,7 @@ remove_all() {
 #just in case paths are wrong to not accidentially remove wrong things
  cd /tmp
 echo "Warning. This will remove signal-cli and all related configurations from your system"
+echo "Your configuration will be archived to $HOME/signalconf.tar.gz"
 echo -n "Continue (y/N)? "
 read REPLY
 if ! [ "$REPLY" = "y" ]; then
@@ -566,17 +574,33 @@ if ! [ "$REPLY" = "y" ]; then
 	exit
 fi
 
-rm -r $SIGNALVAR
-rm -rf $SIGNALPATH/signal
-rm $LIBDIR/libsignal_jni.so 
-rm $LIBDIR/libzkgroup.so 
-rm $DBSYSTEMD/org.asamk.Signal.conf
-rm $DBSYSTEMS/org.asamk.Signal.service
-rm $SYSTEMD/signal.service
+stop_service
 
-systemctl daemon-reload
-systemctl disable signal.service
-systemctl reload dbus.service
+echo "Archiving config"
+tar czf ~/signalconf.tar.gz $SIGNALVAR
+echo "Removing files"
+rm -rf $SIGNALVAR
+rm -rf $SIGNALPATH/signal
+rm -f $LIBPATH/libsignal_jni.so 
+rm -f $LIBPATH/libzkgroup.so 
+rm -f $DBSYSTEMD/org.asamk.Signal.conf
+rm -f $DBSYSTEMS/org.asamk.Signal.service
+rm -f $SYSTEMD/signal.service
+echo "Disabling services"
+if [ -z "$DOCKER" ]; then
+	systemctl daemon-reload
+	systemctl disable signal.service
+	systemctl reload dbus.service
+else
+	DBDAEMON=`ps -eo pid,command | grep dbus-daemon | grep -v grep`
+	if [ -n "$DBDAEMON" ]; then
+		echo "Stopping dbus daemon for Docker"
+		ARRAY=($DBDAEMON)
+		PID=${ARRAY[0]}
+		kill $PID
+	fi
+fi
+
 }
 
 
@@ -589,7 +613,7 @@ if [ -z $OPERATION ]; then
 	echo "register : register a NEW number with Signal"
 	echo "link     : link an EXISTING number with Signal (e.g. you Smartphone)"
 	echo "test     : run a basic test if everything is installed and registered correctly"
-	echo "remove   : Remove signal-cli and all configurations"
+	echo "remove   : Remove signal-cli and all configurations (will be archived)"
 	echo "join     : Join current number to an existing group (invite by group link)"
 	echo "name     : set or change Signal user name and/or avatar picture"
 	echo "start    : Start the signal-cli service (or respective docker processes)"

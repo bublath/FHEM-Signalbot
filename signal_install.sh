@@ -17,6 +17,10 @@ TMPFILE=/tmp/signal$$.tmp
 DBVER=1.2.0
 OPERATION=$1
 
+if [ -n "$2" ]; then
+	PHONE=$2
+fi
+
 #Get OS data
 if [ -e /etc/os-release ]; then
 	source /etc/os-release
@@ -183,6 +187,7 @@ if [ -n "$DOCKER" ]; then
 	echo "done"
 fi
 
+install_and_check apt-ftparchive apt-utils
 install_and_check wget wget
 install_and_check haveged haveged
 install_and_check java default-jre
@@ -377,7 +382,7 @@ fi
 stop_service() {
   if [ -z "$DOCKER" ]; then
 	echo "Stopping signal-cli service"
-	sudo service signal stop
+	service signal stop
   else
 	SIGSERVICE=`ps -eo pid,command | grep $SIGNALVAR | grep -v grep`
 	if [ -n "$SIGSERVICE" ]; then
@@ -393,7 +398,7 @@ stop_service() {
 start_service() {
 	if [ -z "$DOCKER" ]; then
 		echo "Start signal-cli service"
-		sudo service signal start
+		service signal start
 	else
 		DBDAEMON=`ps -eo command | grep dbus-daemon | grep -v grep`
 		if [ -z "$DBDAEMON" ]; then
@@ -634,19 +639,19 @@ if [ "$REPLY" = "n" ]; then
 fi
 
 # Main flow without option: intall, register
-if [ -z "$1" ] || [ $1 = "system" ]; then
+if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "system" ]; then
 	check_and_update
 fi
 
-if [ -z "$1" ] || [ $1 = "install" ]; then
+if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "install" ]; then
 	install_signal_cli
 fi
 
-if [ -z "$1" ] || [ $1 = "register" ]; then
+if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "register" ]; then
 	register_device
 fi
 
-if [ -z "$1" ] || [ $1 = "test" ]; then
+if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "test" ]; then
 	test_device
 fi
 

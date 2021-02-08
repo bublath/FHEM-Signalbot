@@ -191,6 +191,7 @@ fi
 
 install_and_check apt-ftparchive apt-utils
 install_and_check wget wget
+install_and_check sudo sudo
 install_and_check haveged haveged
 install_and_check java default-jre
 install_and_check diff diffutils

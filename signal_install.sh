@@ -28,7 +28,8 @@ fi
 
 if grep -q docker /proc/1/cgroup; then 
    echo "You seem to run in a docker environment. Warning: This is experimental"
-   if [ "$USER" != "root" ]; then
+	USER=`id | grep root`
+	if [ -z "$USER" ]; then
 		echo "Docker Installation needs to run under root"
 		exit
 	fi

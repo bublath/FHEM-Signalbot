@@ -1,5 +1,5 @@
 ##############################################
-# $Id:1.0$
+# $Id:1.1$
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -101,9 +101,17 @@ sub Signalbot_Set($@) {					#
 		my $message = "";
 		#To allow spaces in strings, join string and split it with parse_line that will honor spaces embedded by double quotes
 		my $fullstring=join(" ",@args);
-		$fullstring=decode_utf8($fullstring);
+		if ($fullstring =~ /^\* (.*)/s) {  #/s required so newlines are included in match
+			#Extra utf Encoding marker)
+			$fullstring=encode_utf8($1);
+			Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Extra UTF8 encoding of:$fullstring:\n";
+		}
+		eval { $fullstring=decode_utf8($fullstring); };
+			print "error from decode\n" if $@;
+			
 		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:\n";
-		my @args=parse_line(' ',0,$fullstring);
+		my $tmpmessage = $fullstring =~ s/\\n/\x0a/r;
+		my @args=parse_line(' ',0,$tmpmessage);
 		
 		while(my $curr_arg = shift @args){
 			if($curr_arg =~ /^\@([^#].*)$/){	#Compatbility with SiSi - also allow @# as groupname
@@ -275,8 +283,8 @@ sub Signalbot_message_callback {
 		#Activate Babble integration, only if sender or sender group is in babblePeer 
 		if (defined $bDevice && defined $bPeer && defined $replyPeer) {
 			if ($bPeer =~ /^.*$senderRegex.*$/ || $bPeer =~ /^.*$sourceRegex.*$/ || ($groupIdRegex ne "" && $bPeer =~ /^.*$groupIdRegex.*$/)) {
-				Babble_DoIt($bDevice,$message,$replyPeer);
-				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Babble called for $message ($replyPeer)";
+				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Calling Babble for $message ($replyPeer)";
+				my $rep=Babble_DoIt($bDevice,$message,$replyPeer);
 			}
 		}
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message from $sender : $message processed";
@@ -382,7 +390,7 @@ sub Signalbot_setup($@){
 		return "Error getting Dbus reactor" unless defined $reactor;
 		$hash->{helper}{dreactor}=$reactor;
 	}; 
-	if (defined $@ and $@ ne "") {
+	if ($@) {
 		#invalidate so there are no additional error
 		Log3 $name, 3, $hash->{NAME}.": Error while initializing Dbus:".$@;
 		$hash->{helper}{dbus}=undef;
@@ -647,7 +655,7 @@ sub Signalbot_Attr(@) {					#
   } elsif($attr eq "babblePeer") {
 	#Take over as is
 	my $bDevice=AttrVal($hash->{NAME},"babbleDev",undef);
-	if (!defined $bDevice) {
+	if (!defined $bDevice && $init_done) {
 		foreach my $dev ( sort keys %main::defs ) {
 			if ($defs{$dev}->{TYPE} eq "Babble") {
 				CommandAttr(undef,"$name babbleDev $dev");
@@ -657,7 +665,7 @@ sub Signalbot_Attr(@) {					#
 	}
 	return undef;
   } elsif($attr eq "babbleDev") {
-	return undef unless (defined $val && $val ne "");
+	return undef unless (defined $val && $val ne "" && $init_done);
 	my $bhash = $defs{$val};
 	return "Not a Babble device $val" unless $bhash->{TYPE} eq "Babble";
 	return undef;
@@ -905,26 +913,26 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 	<ul>
 		<li><b>set &lt;name&gt; &lt;send&gt; [@&lt;Recipient1&gt; ... @&lt;RecipientN&gt;] [#&lt;GroupId1&gt; ... #&lt;GroupIdN&gt;] [&&lt;Attachment1&gt; ... &&lt;AttachmentN&gt;] [&lt;Text&gt;]</b><br>
 			<a name="send"></a>
-			<ul>
-			<li>Use round brackets to let FHEM execute the content (e.g <code>&({plotAsPng('SVG_Temperatures')}</code></li>
-			<li>If a recipient, group or attachment contains white spaces, the whole expression (including @ # or &) needs to be put in double quotes. Escape quotes with \"</li>
-			<li>If the round brackets contain curly brackets to execute Perl commands, two semi-colons (;;) need to be used to seperate multiple commands and at the end</li>
-			<li>For compatibility reasons @# can also be used to mark group names</li>
-			</ul>
+			Send a message to a Signal recipient using @Name or @+49xxx as well as groups with #Group or #@Group along with an attachment with &<path to file> and a message.
 		</li>
-		<li>Note:<br>
+		<br>
+		<li>
 			<a name="send2"></a>
-			<ul>
+			<li>Use round brackets to let FHEM execute the content (e.g <code>&({plotAsPng('SVG_Temperatures')}</code></li>
+			<li>If a recipient, group or attachment contains white spaces, the whole expression (including @ # or &) needs to be put in double quotes. Escape quotes within with \"</li>
+			<li>If the round brackets contain curly brackets to execute Perl commands, two semi-colons (;;) need to be used to seperate multiple commands and at the end. The return value will be used e.g. as recipient</li>
+			<li>For compatibility reasons @# can also be used to mark group names</li>
 			<li>Messages to multiple recipients will be sent as one message</li>
 			<li>Messages to multiple groups or mixed with individual recipients will be sent in multiple messages</li>
 			<li>Attachments need to be file names readable for the fhem user with absolute path or relative to fhem user home</li>
 			<li>Recipients can be either contact names or phone numbers (starting with +). Since signal-cli only understand phone numbers, 
 			Signalbot tries to translate known contact names from its cache and might fail to send the message if unable to decode the contact<br>
+			<li>To send multi line messages, use "\\n" in the message text</li>
 			<br>
 			Example:<br>
 			<code>set Signalbot send "@({my $var=\"Joerg\";; return $var;;})" #FHEM "&( {plotAsPng('SVG_Temperatures')} )" Here come the current temperature plot</code><br>
 			</ul>
-			<br>			
+			<br>
 		</li>
 		<a name="refreshGroups"></a>
 		<li><b>set refreshGroups</b><br>
@@ -949,45 +957,57 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 	<b>Attributes</b>
 	<ul>
 		<br>
-		<li>poll_interval<br>
+		<li><b>poll_interval</b><br>
 		<a name="poll_interval"></a>
 			Set the polling interval in minutes to query new messages<br>
 			Typically not required, since the module gets notified when new messages arrive.<br>
 			Default: -, valid values: decimal number<br>
 		</li>
-		<li><i>allowedPeer</i><br>
+		<li><b>allowedPeer</b><br>
 		<a name="allowedPeer"></a>
 			Comma separated list of recipient(s) and/or groupId(s), allowed to
-			update the msg.* readings and trigger new events when receiving a new message.
+			update the msg.* readings and trigger new events when receiving a new message.<br>
 			<b>If the attribute is not defined, everyone is able to trigger new events!!</b>
 		</li>
+		<li><b>babblePeer</b><br>
+		<a name="babblePeer"></a>
+			Comma separated list of recipient(s) and/or groupId(s) that will trigger that messages are forwarded to a Babble module defined by "BabbleDev". This can be used to interpret real language interpretation of messages as a chatbot or to trigger FHEM events.<br>
+			<b>If the attribute is not defined, nothing is sent to Babble</b>
+		</li>
+		<li><b>babbleDev</b><br>
+		<a name="babbleDev"></a>
+			Name of Babble Device to be used. This will typically be automatically filled when bubblePeer is set.<br>
+			<b>If the attribute is not defined, nothing is sent to Babble</b>
+		</li>
 		<br>
-		<li><a href="#ignore">ignore</a></li>
-		<li><a href="#do_not_notify">do_not_notify</a></li>
-		<li><a href="#showtime">showtime</a></li>
 	</ul>
 	<br>
 	<a name="SignalbotReadings"></a>
 	<b>Readings</b>
 	<ul>
 		<br>
-		<li>(prev)msgAttachment</li>
+		<li><b>(prev)msgAttachment</b></li>
 		Attachment(s) of the last received (or for history reasons the previous before). The path points to the storage in signal-cli and can be used to retrieve the attachment.<br>
-		<li>(prev)msgGroupName</li>
+		<li><b>(prev)msgGroupName</b></li>
 		Group of the last message (or for history reasons the previous before). Empty if last message was a private message<br>
-		<li>(prev)msgSender</li>
+		<li>(prev)msgSender</b></li>
 		Sender that sent the last message (or previous before) <br>
-		<li>(prev)msgText</li>
+		<li><b>(prev)msgText</b></li>
 		Content of the last message <br>
-		<li>(prev)msgTimestamp</li>
+		<li><b>(prev)msgTimestamp</b></li>
 		Time the last message was sent (a bit redundant, since all readings have a timestamp anyway<br>
-		<li>sentMsg</li>
+		<li><b>sentMsg</b></li>
 		Content of the last message that was sent from this module<br>
-		<li>sentRecipient</li>
+		<li><b>sentRecipient</b></li>
 		Recipient of the last message that was sent<br>
-		This is taken from the actual reply and will contain the last recipient that confirmed getting the message in case multiple recipients or group memebers got it<br>
-		<li>sendMsgTimestamp</li>
+		This is taken from the actual reply and will contain the last recipient that confirmed getting the message in case multiple recipients or group members got it<br>
+		<li><b>sentMsgTimestamp</b></li>
 		Timestamp the message was received by the recipient. Will show pending of not confirmed (likely only if even the Signal server did not get it)<br>
+		<li><b>contactList</b></li>
+		List of known contacts in the format Number1=Name1,Number2=Name2,...<br>
+		Auto generated from know contacts with "saveContacts"<br>
+		<li><b>joinedGroups</b></li>
+		Space separated list of groups the registered number is joined to<br>
 	<br>
 </ul>
 

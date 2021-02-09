@@ -3,7 +3,9 @@ SCRIPTVERSION="$Id:1.2$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
-PHONE="+49xxxxx"
+if [ -z "$PHONE" ]; then
+	PHONE="+49xxxx"
+fi
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
@@ -40,6 +42,11 @@ if grep -q docker /proc/1/cgroup; then
 		exit
 	fi
    DOCKER=yes
+   if [ -n "$FHEMUSER" ]; then
+		SIGNALUSER=$FHEMUSER
+	fi
+	#overide path so its in the "real" world
+	SIGNALPATH=/opt/fhem
 fi
 
 echo "This script will help you to install signal-cli as system dbus service"
@@ -377,7 +384,10 @@ if [ -z "$DOCKER" ]; then
 	systemctl daemon-reload
 	systemctl enable signal.service
 	systemctl reload dbus.service
-
+else
+	#Create a copy of config files in docker signal directry
+	cp $DBSYSTEMS/org.asamk.Signal.service $SIGNALPATH/signal
+	cp $DBSYSTEMD/org.asamk.Signal.conf $SIGNALPATH/signal
 fi
 }
 
@@ -408,17 +418,28 @@ start_service() {
 			echo "Starting dbus daemon for Docker"
 			dbus-daemon --system --address=unix:path=/run/dbus/system_bus_socket >/var/log/dbus.log 2>/var/log/dbus.err &
 		fi
+		echo -n "Waiting for dbus to become ready."
+		WAIT=""
+		while [ -z "$WAIT" ]
+		do
+			WAIT=`ps -eo pid,command | grep dbus-daemon | grep -v grep`
+			echo -n "."
+			sleep 1
+		done
+		echo "running"
 		SIGSERVICE=`ps -eo pid,command | grep $SIGNALVAR | grep -v grep`
+		WAITCHECK="ps -eo pid,command | grep $SIGNALVAR | grep java | grep -v grep"
 		if [ -z "$SIGSERVICE" ]; then
 			cd $SIGNALPATH/signal/bin
 			echo "Starting signal-cli daemon for Docker"
 			sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE daemon --system >/var/log/signal.log 2>/var/log/signal.err &
+			WAITCHECK="grep dbus /var/log/signal.err"
 		fi
 		echo -n "Waiting for signal-cli to become ready."
 		WAIT=""
 		while [ -z "$WAIT" ]
 		do
-			WAIT=`ps -eo pid,command | grep $SIGNALVAR | grep java | grep -v grep`
+			WAIT=`$WAITCHECK`
 			echo -n "."
 			sleep 1
 		done
@@ -445,6 +466,15 @@ echo "done"
 
 register_device() {
 cd $SIGNALPATH/signal/bin
+if [ -d $SIGNALVAR/data ]; then
+	echo "There already seems to be a registration"
+	echo -n "Still register (y/N)?"
+	read REPLY	
+	if ! [ "$REPLY" = "y" ]; then
+		return;
+	fi
+fi
+
 echo "Registering for $PHONE"
 echo
 echo -n "Receive registration code for $PHONE by (S)MS or (V)oice (s/v)? "
@@ -570,7 +600,7 @@ print "return timestamp:".\$retcode."\n";
 EOF
 echo "Sending a message via perl Net::DBus"
 perl $TMPFILE
-echo "If the recipient got all thre messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
+echo "If the recipient got all three messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
 }
 
 remove_all() {
@@ -634,11 +664,13 @@ else
 	echo "Your chose the following option: $OPERATION"
 fi
 echo
-echo -n "Proceed (Y/n)? "
-read REPLY
-if [ "$REPLY" = "n" ]; then
+if [ -z "$OPERATION" ] || [ "$OPERATION" = "system" ] || [ "$OPERATION" = "install" ] || [ "$OPERATION" = "all" ]; then
+  echo -n "Proceed (Y/n)? "
+  read REPLY
+  if [ "$REPLY" = "n" ]; then
 	echo "Aborting..."
 	exit
+  fi
 fi
 
 # Main flow without option: intall, register

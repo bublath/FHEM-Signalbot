@@ -568,8 +568,6 @@ stop_service
 echo "If you get a 'in use, waiting' message, skip by pressing CTRL-C - this is normal when system service is already up and running"
 cd $SIGNALPATH/signal/bin
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE send -m "Test message from the command line" "$RECIPIENT"
-echo "checking and receiving"
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE receive
 start_service
 echo "Sending a message via dbus-send command"
 dbus-send --system --type=method_call --print-reply --dest="org.asamk.Signal" /org/asamk/Signal org.asamk.Signal.sendMessage string:"Test message via DBus" array:: string:$RECIPIENT
@@ -706,9 +704,6 @@ fi
 
 if [ -z "$OPERATION" ] || [ $OPERATION = "all" ] || [ $OPERATION = "test" ]; then
 	test_device
-fi
-
-if [ -z "$OPERATION" ]; then
 	exit
 fi
 

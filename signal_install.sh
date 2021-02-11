@@ -375,6 +375,7 @@ User=$SIGNALUSER
 BusName=org.asamk.Signal
 	
 [Install]
+WantedBy=multi-user.target
 Alias=dbus-org.asamk.Signal.service
 EOF
 

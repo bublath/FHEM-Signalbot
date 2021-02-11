@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:1.2$"
+SCRIPTVERSION="$Id:1.3$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -301,15 +301,15 @@ if [ $NEEDINSTALL = 1 ]; then
 		rm -rf signal
 		mv "signal-cli-$SIGNALVERSION" signal
 		if [ -n "$RASPI" ]; then
-			echo -n "Removing native x86 since you're on Raspberry..."
-			zip -d $SIGNALPATH/signal/lib/zkgroup-java-*.jar libzkgroup.so
-			#Disable for now since that is only required for 0.7.5+
-			#zip -d $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
-			echo "done"
 			echo "Downloading native armv7l libraries..."
 			cd /tmp
 			rm -rf libsignal_jni.so libzkgroup.so
 			wget -qN http://bublath.de/signal/libsignal_jni.so http://bublath.de/signal/libzkgroup.so
+			echo "done"
+			echo -n "Updating native x86 since you're on Raspberry..."
+			zip -u $SIGNALPATH/signal/lib/zkgroup-java-*.jar libzkgroup.so
+			#Disable for now since that is only required for 0.7.5+
+			#zip -u $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
 			mv libsignal_jni.so libzkgroup.so $LIBPATH
 			echo "done"
 		fi
@@ -324,6 +324,8 @@ fi
 chown -R $SIGNALUSER: $SIGNALVAR
 chown -R $SIGNALUSER: $SIGNALPATH/signal
 
+if [ -z "$DOCKER" ]; then
+	#Don't do this in Docker environment
 
 cat >$TMPFILE <<EOF
 <?xml version="1.0"?> <!--*-nxml-*-->
@@ -376,18 +378,12 @@ BusName=org.asamk.Signal
 Alias=dbus-org.asamk.Signal.service
 EOF
 
-if [ -z "$DOCKER" ]; then
-	#Don't do this in Docker environment
 	check_and_compare_file  $SYSTEMD/signal.service $TMPFILE
 
 	#Reload config after change
 	systemctl daemon-reload
 	systemctl enable signal.service
 	systemctl reload dbus.service
-else
-	#Create a copy of config files in docker signal directry
-	cp $DBSYSTEMS/org.asamk.Signal.service $SIGNALPATH/signal
-	cp $DBSYSTEMD/org.asamk.Signal.conf $SIGNALPATH/signal
 fi
 }
 
@@ -415,6 +411,7 @@ start_service() {
 	else
 		DBDAEMON=`ps -eo command | grep dbus-daemon | grep -v grep`
 		if [ -z "$DBDAEMON" ]; then
+			rm /run/dbus/pid
 			echo "Starting dbus daemon for Docker"
 			dbus-daemon --system --address=unix:path=/run/dbus/system_bus_socket >/var/log/dbus.log 2>/var/log/dbus.err &
 		fi
@@ -466,14 +463,6 @@ echo "done"
 
 register_device() {
 cd $SIGNALPATH/signal/bin
-if [ -d $SIGNALVAR/data ]; then
-	echo "There already seems to be a registration"
-	echo -n "Still register (y/N)?"
-	read REPLY	
-	if ! [ "$REPLY" = "y" ]; then
-		return;
-	fi
-fi
 
 echo "Registering for $PHONE"
 echo
@@ -483,14 +472,11 @@ OPTION="";
 if [ "$REPLY" = "s" ]; then
 	OPTION=""
 	echo "Registering $PHONE with SMS"
-fi
-if [ "$REPLY" = "v" ]; then
+elif [ "$REPLY" = "v" ]; then
 	OPTION="--voice"
 	echo "Registering $PHONE with Voice call"
-fi
-
-if [ -z "$OPTION" ]; then
-	echo "Unknown option $OPTION, exiting"
+else 
+	echo "Unknown option $REPLY, exiting"
 	exit
 fi
 stop_service
@@ -573,11 +559,16 @@ echo "Please enter the number (+49...) of somebody that you can send a test mess
 echo -n "Number:"
 read REPLY
 RECIPIENT=$REPLY
+if [ -z "$REPLY" ]; then
+	return
+fi
 echo "Sending a message from command line to $RECIPIENT"
 stop_service
 echo "If you get a 'in use, waiting' message, skip by pressing CTRL-C - this is normal when system service is already up and running"
 cd $SIGNALPATH/signal/bin
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE send -m "Test message from the command line" "$RECIPIENT"
+echo "checking and receiving"
+sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE receive
 start_service
 echo "Sending a message via dbus-send command"
 dbus-send --system --type=method_call --print-reply --dest="org.asamk.Signal" /org/asamk/Signal org.asamk.Signal.sendMessage string:"Test message via DBus" array:: string:$RECIPIENT
@@ -659,7 +650,7 @@ if [ -z $OPERATION ]; then
 	echo "name     : set or change Signal user name and/or avatar picture"
 	echo "start    : Start the signal-cli service (or respective docker processes)"
 	echo
-	echo "!!! Everything needs to run with sudo !!!"
+	echo "!!! Everything needs to run with sudo/root !!!"
 else
 	echo "Your chose the following option: $OPERATION"
 fi
@@ -674,44 +665,70 @@ if [ -z "$OPERATION" ] || [ "$OPERATION" = "system" ] || [ "$OPERATION" = "insta
 fi
 
 # Main flow without option: intall, register
-if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "system" ]; then
+if [ -z "$OPERATION" ] || [ $OPERATION = "all" ] || [ $OPERATION = "system" ]; then
 	check_and_update
 fi
 
-if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "install" ]; then
+if [ -z "$OPERATION" ] || [ $OPERATION = "all" ] || [ $OPERATION = "install" ]; then
 	install_signal_cli
 fi
 
-if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "register" ]; then
+if [ -z "$OPERATION" ] || [ $OPERATION = "all" ]; then
+	cd $SIGNALPATH/signal/bin
+	if [ -d $SIGNALVAR/data ]; then
+		if [ -e $SIGNALVAR/data/$PHONE ]; then
+			echo "Your device $PHONE is already configured, do want to run through registration again?"
+		else
+			echo "You already seem to have a device configured, add $PHONE instead?"
+		fi
+		echo -n "Continue (y) or skip (N)?"
+		read REPLY	
+		if [ "$REPLY" = "y" ]; then
+			echo "You can either"
+			echo "(r) register a new device (if that device is already registered e.g. to a smartphone that will be removed)"
+			echo "(l) link to an already registered device (both device will get the messages)"
+			echo "It is recommended to register a new device e.g. a land-line for usage with FHEM"
+			echo -n "register or link (r/l)"
+			read REPLY
+			if [ "$REPLY" = "r" ]; then
+				register_device
+			elif [ "$REPLY" = "l" ]; then
+				link_device
+			fi
+		fi
+	fi
+fi
+
+if [ "$OPERATION" = "register" ]; then
 	register_device
 fi
 
-if [ -z "$1" ] || [ $1 = "all" ] || [ $1 = "test" ]; then
+if [ -z "$OPERATION" ] || [ $OPERATION = "all" ] || [ $OPERATION = "test" ]; then
 	test_device
 fi
 
-if [ -z "$1" ]; then
+if [ -z "$OPERATION" ]; then
 	exit
 fi
 
 # Other options
-if [ $1 = "remove" ]; then 
+if [ $OPERATION = "remove" ]; then 
 	remove_all
 fi
 
-if [ $1 = "link" ]; then
+if [ $OPERATION = "link" ]; then
 	link_device
 fi
 
-if [ $1 = "start" ]; then
+if [ $OPERATION = "start" ]; then
 	start_service
 fi
 
-if [ $1 = "name" ]; then
+if [ $OPERATION = "name" ]; then
 	name_user
 fi
 
-if [ $1 = "join" ]; then
+if [ $OPERATION = "join" ]; then
 	join_group
 fi
 

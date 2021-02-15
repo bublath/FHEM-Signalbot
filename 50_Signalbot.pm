@@ -1,5 +1,5 @@
 ##############################################
-# $Id:1.1$
+# $Id:1.2$
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -24,7 +24,12 @@ my %sets = (
   "refreshGroups" => "noArg",
   "reinit" => "noArg",
   "saveContacts" => "noArg",
-  "setContact" => "textField"
+  "setContact" => "textField",
+  "createGroup" => "textField",		#Call updategroups with empty group parameter, mandatory name and optional avatar picture
+  "invite" => "textField",			#Call updategroups with mandatory group name and mandatory list of numbers to join
+  "block" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
+  "unblock" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
+  "updateGroup" => "textField"		#Call updategroups to rename a group and/or set avatar picture
  );
 
 my $sep="##"; #Seperator used for splitting message content passed from Child to Parent
@@ -48,6 +53,7 @@ sub Signalbot_Initialize($) {
 												"allowedPeer ".
 												"babblePeer ".
 												"babbleDev ".
+												"babbleExclude ".
 												"$readingFnAttributes";
 }
 ################################### Todo: Set or Attribute for Mode? Other sets needed?
@@ -80,15 +86,50 @@ sub Signalbot_Set($@) {					#
 
 	if ( $cmd eq "refreshGroups") {
 		#Gruppen neu einlesen
-		Signalbot_Refreshgroups($hash) if ($init_done);
-		return undef;
+		my $ret;
+		$ret=Signalbot_Refreshgroups($hash) if ($init_done);
+		return $ret;
 	} elsif ( $cmd eq "setContact") {
 		if (int(@args)<2 ) {
-			return "Usage: set ".$hash->{NAME}." <number> <nickname>";
+			return "Usage: set ".$hash->{NAME}." setContact <number> <nickname>";
 		} else {
 			my $number = shift @args;
 			my $nickname = join (" ",@args);
 			my $ret=Signalbot_setContactName($hash,$number,$nickname);
+			return $ret if defined $ret;
+		}
+		return undef;
+	} elsif ( $cmd eq "createGroup") {
+		if (int(@args)<1 || int(@args)>2 ) {
+			return "Usage: set ".$hash->{NAME}." createGroup <group name> &[path to thumbnail]";
+		} else {
+			my $ret=Signalbot_updateGroup($hash,@args);
+			return $ret if defined $ret;
+		}
+		return undef;
+	} elsif ( $cmd eq "block" || $cmd eq "unblock") {
+		if (int(@args)!=1) {
+			return "Usage: set ".$hash->{NAME}." ".$cmd." <group name>|<contact>";
+		} else {
+			my $name=shift @args;
+			my $ret=Signalbot_setBlocked($hash,$name,($cmd eq "block"?1:0));
+			return $ret if defined $ret;
+		}
+		return undef;
+	} elsif ( $cmd eq "updateGroup") {
+		if (int(@args)<1 || int(@args)>3 ) {
+			return "Usage: set ".$hash->{NAME}." updateGroup <group name> #[new name] &[path to thumbnail]";
+		} else {
+			my $ret=Signalbot_updateGroup($hash,@args);
+			return $ret if defined $ret;
+		}
+		return undef;
+	} elsif ( $cmd eq "invite") {
+		if (int(@args) < 2 ) {
+			return "Usage: set ".$hash->{NAME}." invite <group name> <contact1> [<contact2] ...]";
+		} else {
+			my $groupname = shift @args;
+			my $ret=Signalbot_invite($hash,$groupname,@args);
 			return $ret if defined $ret;
 		}
 		return undef;
@@ -101,13 +142,14 @@ sub Signalbot_Set($@) {					#
 		my $message = "";
 		#To allow spaces in strings, join string and split it with parse_line that will honor spaces embedded by double quotes
 		my $fullstring=join(" ",@args);
-		if ($fullstring =~ /^\* (.*)/s) {  #/s required so newlines are included in match
+		my $bExclude=AttrVal($hash->{NAME},"babbleExclude",undef);
+		if ($bExclude && $fullstring =~ /$bExclude(.*)/s) {  #/s required so newlines are included in match
 			#Extra utf Encoding marker)
 			$fullstring=encode_utf8($1);
 			Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Extra UTF8 encoding of:$fullstring:\n";
 		}
 		eval { $fullstring=decode_utf8($fullstring); };
-			print "error from decode\n" if $@;
+			Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Error from decode" if $@;
 			
 		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:\n";
 		my $tmpmessage = $fullstring =~ s/\\n/\x0a/r;
@@ -225,6 +267,10 @@ sub Signalbot_message_callback {
 
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message Callback";
 
+	if ($message eq "") {
+		#Empty messages happens e.g. if someone leaves a group - ignore
+		return;
+	}
 
 	my @groups=@$groupID;
 	my $tmp="";
@@ -273,6 +319,12 @@ sub Signalbot_message_callback {
 
 		my $bDevice=AttrVal($hash->{NAME},"babbleDev",undef);
 		my $bPeer=AttrVal($hash->{NAME},"babblePeer",undef);
+		my $bExclude=AttrVal($hash->{NAME},"babbleExclude",undef);
+		
+		if ($bExclude && $message =~ /$bExclude/) {
+			Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message matches BabbleExclude, skipping BabbleCall";
+			return;
+		}
 		
 		#Just pick one sender in den Priority: group, named contact, number, babblePeer
 		my $replyPeer=undef;
@@ -468,13 +520,109 @@ sub Signalbot_getContactName($@) {
 		return "Dbus not initialized" unless defined $object;
 		eval {
 			$contact = $object->getContactName($number);
-		}; 
-		if (defined $@  && $@ ne "") { return $@ };
+		}; return "Error getting contact name:".$@ if $@ && "$@" ne '';
 		#Add to internal inventory
 		$hash->{helper}{contacts}{$number}=$contact;
 	}
 	if ($contact eq "") {return $number;}
 	return $contact;
+}
+
+#Allow create only for new groups
+sub Signalbot_updateGroup($@) {
+    my ( $hash,@args) = @_;
+	my $groupname = shift @args;
+	if ($groupname =~ /^#(.*)/) {
+		$groupname=$1;
+	}
+	my $rename;
+	my $avatar;
+	while (my $next = shift @args) {
+		if ($next =~ /^#(.*)/) {
+			$rename=$1;
+		}
+		if ($next =~ /^\&(.*)/) {
+			$avatar=$1;
+		}
+	}
+	if (defined $avatar) {
+		return "Can't find file $avatar" unless ( -e $avatar);
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": updateGroup Avatar $avatar";
+		my $size = -s $avatar;
+		return "Please reduce the size of your group picture to <2MB" if ($size>2000000);
+	}
+	my @groupID=Signalbot_getGroup($hash,$groupname);
+	#Rename case: Group has to exist
+	if (defined $rename) {
+		if (int(@groupID)==1) {
+			return "Group $groupname does not exist";
+		} else {
+			Log3 $hash->{NAME}, 5, $hash->{NAME}.": renameGroup $groupname to $rename";
+			$groupname=$rename;
+		}
+	}
+	#Create case (no rename and no avatar): Group cannot exist
+	if (!defined $rename && !defined $avatar) {
+		return "Group $groupname already exists" if int(@groupID)>1;
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": createGroup $groupname";
+	}
+	if (int(@groupID)==1) {
+		@groupID=();
+	}
+	my $object=$hash->{helper}{dobject};
+	return "Dbus not initialized" unless defined $object;
+	eval {
+	#Disabling to set an avatar picture since that is always throwing in error currently
+		my $ret = $object->updateGroup(\@groupID,$groupname,undef,$avatar);
+		my @groupID = @$ret;
+	}; return "Error updating group:".$@ if $@ && "$@" ne '';
+	return Signalbot_Refreshgroups($hash);
+}
+
+sub Signalbot_invite($@) {
+    my ( $hash,$groupname,@contacts) = @_;
+
+	my @members=();
+	while (@contacts) {
+		my $contact=shift @contacts;
+		my $number=Signalbot_translateContact($hash,$contact);
+		return "Unknown Contact" unless defined $number;
+		push @members,$number;
+	}
+	
+	my @group=Signalbot_getGroup($hash,$groupname);
+	return join(" ",@group) unless int(@group)>1;
+	
+	my $object=$hash->{helper}{dobject};
+	return "Dbus not initialized" unless defined $object;
+
+	eval {
+		my $ret=$object->updateGroup(\@group,undef,\@members,undef);
+		my @groupID = @$ret;
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Invited ".join(",",@contacts)." to $groupname";
+	}; return "Error in invite:".$@ if $@ && "$@" ne '';
+	#reply does not matter (should be same groupID as the one sent)
+	return undef;
+}
+
+sub Signalbot_setBlocked($@) {
+    my ( $hash,$name,$blocked) = @_;
+	my $object=$hash->{helper}{dobject};
+	return "Dbus not initialized" unless defined $object;
+	if ($name =~ /^#(.*)/) {
+		my @group=Signalbot_getGroup($hash,$1);
+		return join(" ",@group) unless int(@group)>1;
+		eval {my $ret=$object->setGroupBlocked(\@group,$blocked);};
+		return "Error blocking group:".$@ if $@ && "$@" ne '';
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": ".($blocked==0?"Un":"")."blocked $name";
+	} else {
+		my $number=Signalbot_translateContact($hash,$name);
+		return "Unknown Contact" unless defined $number;
+		eval {my $ret=$object->setContactBlocked($number,$blocked);};
+		return "Error blocking contact:".$@ if $@ && "$@" ne '';
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": ".($blocked==0?"Un":"")."blocked $name ($number)";
+	}
+	return undef;
 }
 
 sub Signalbot_setContactName($@) {
@@ -490,11 +638,9 @@ sub Signalbot_setContactName($@) {
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;
 	eval {
-		my $ret = $object->setContactName($number,$name);
-	}; 
-	if (defined $@ && $@ ne "") {
-		return $@;
-	}
+		$object->setContactName($number,$name);
+	}; return "Error setting contact name:".$@ if $@ && "$@" ne '';
+
 	#Add to internal inventory as well
 	$hash->{helper}{contacts}{$number}=$name;
 	return undef;
@@ -525,7 +671,9 @@ sub Signalbot_translateGroup($@) {
 		return $key if $val eq $groupID;		
     }
 	#Group not found, so check if we simply don't know it yet
-	Signalbot_Refreshgroups($hash) if ($init_done);
+	my $ret;
+	$ret=Signalbot_Refreshgroups($hash) if ($init_done);
+	return $ret if $ret;
 	#And try again
 	$groups=$hash->{helper}{groups};
 	foreach my $key (keys %{$groups}) {
@@ -560,16 +708,21 @@ sub Signalbot_Refreshgroups($@) {
 	return "Dbus not initialized" unless defined $object;
 
 	my $grouplist="";
-	my $ret = $object->getGroupIds();
+	my $ret;
+	eval { $ret = $object->getGroupIds();};
+	return "Error sending getting GroupIds:".$@ if $@ && "$@" ne '';
 	my @groups = @$ret;
 	foreach (@groups) {
 		my @group=@$_;
-		my $groupname = $object->getGroupName(\@group);
+		my $groupname;
+		eval { $groupname = $object->getGroupName(\@group); };
+		return "Error sending getting GroupName:".$@ if $@ && "$@" ne '';
 		$hash->{helper}{groups}{$groupname}=join(" ",@group);	
 		Log3 $hash->{NAME}, 5, "found group ".$groupname; 
 		$grouplist=$grouplist." ".$groupname;
 	}
-	readingsSingleUpdate($hash, 'joinedGroups', $grouplist,0);	
+	readingsSingleUpdate($hash, 'joinedGroups', $grouplist,0);
+	return undef;
 }
 
 sub Signalbot_sendMessage($@) {
@@ -595,6 +748,26 @@ sub Signalbot_sendMessage($@) {
 	readingsEndUpdate($hash, 0);
 }
 
+#get the identifies (list of hex codes) for a group based on the name
+#Check error with int(@)=1
+sub Signalbot_getGroup($@) {
+	my ($hash,$rec) = @_;
+	Log3 $hash->{NAME}, 5, $hash->{NAME}.": getGroup $rec";
+	if ( $rec =~ /^#(.*)/) {
+		$rec=$1;
+	}
+	my $group=$hash->{helper}{groups}{$rec};
+	if (!defined($group)) {
+		#Check if we need to cache a new group
+		my $ret;
+		$ret=Signalbot_Refreshgroups($hash);
+		return $ret if $ret;
+		$group=$hash->{helper}{groups}{$rec};
+		return "Unknown group ".$rec." please check or refresh group list" unless defined $group;
+	}
+	return split(" ",$group);
+}
+
 sub Signalbot_sendGroupMessage($@) {
     my ( $hash,$rec,$att,$mes ) = @_;
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": sendGroupMessage called for $rec:$att:$mes"; 
@@ -603,15 +776,9 @@ sub Signalbot_sendGroupMessage($@) {
 	my @recipient= split(/,/,$rec);
 	if (@recipient>1) { return "Can only send to one group at once";}
 	my @attach=split(/,/,$att);
-	my @arr="";
-	my $group=$hash->{helper}{groups}{$rec};
-	if (!defined($group)) {
-		#Check if we need to cache a new group
-		Signalbot_Refreshgroups($hash);
-		$group=$hash->{helper}{groups}{$rec};
-		return "Unknown group ".$_." please check or refresh group list" unless defined $group;
-	}
-	@arr=split(" ",$group);
+	my @arr=Signalbot_getGroup($hash,$rec);
+	return join(" ",@arr) unless int(@arr)>1;
+
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;	
 
@@ -650,6 +817,9 @@ sub Signalbot_Attr(@) {					#
       RemoveInternalTimer($hash);
     }
   }	elsif($attr eq "allowedPeer") {
+	#Take over as is
+	return undef;
+  }	elsif($attr eq "babbleExclude") {
 	#Take over as is
 	return undef;
   } elsif($attr eq "babblePeer") {
@@ -946,6 +1116,28 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<a name="setContact"></a>
 		Define a nickname for a phone number to be used with the send command and in readings<br>
 		</li>
+		<li><b>set createGroup &ltgroupname&gt [&&ltgroup picture&gt]</b><br>
+		<a name="createGroup"></a>
+		Define a new Signal group with the specified name.<br>
+		Note: Pictures >2MB are known to cause issues and are blocked.<br>
+		</li>
+		<li><b>set updateGroup &ltgroupname&gt #[&ltnew groupname&gt] [&&ltgroup picture&gt]</b><br>
+		<a name="updateGroup"></a>
+		Update the name and/or group picture for an existing group.<br>
+		Note: Pictures >2MB are known to cause issues and are blocked.<br>
+		</li>
+		<li><b>set invite &ltgroupname&gt &ltcontact&gt</b><br>
+		<a name="invite"></a>
+		Invite new members to an existing group.<br>
+		</li>		
+		<li><b>set block #&ltgroupname&gt|&ltcontact&gt</b><br>
+		<a name="block"></a>
+		Put a group or contact on the blocked list (at the server) so you won't receive messages anymore. While the attribute "allowedPeer" is handled on FHEM level and messages are still received (but ignored), FHEM will not receive messages anymore for blocked communication partners<br>
+		</li>
+		<li><b>set unblock #&ltgroupname&gt|&ltcontact&gt</b><br>
+		<a name="unblock"></a>
+		Reverses the effect of "block", re-enabling the communication.<br>
+		</li>		
 		<li><b>set reinit</b><br>
 		<a name="reinit"></a>
 		Re-Initialize the module. For testing purposes when module stops receiving or has other issues. Should not be necessary.<br>

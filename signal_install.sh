@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:1.3$"
+SCRIPTVERSION="$Id:1.4$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -9,7 +9,7 @@ fi
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.7.4"
+SIGNALVERSION="0.8.0"
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -304,13 +304,15 @@ if [ $NEEDINSTALL = 1 ]; then
 			echo "Downloading native armv7l libraries..."
 			cd /tmp
 			rm -rf libsignal_jni.so libzkgroup.so
-			wget -qN http://bublath.de/signal/libsignal_jni.so http://bublath.de/signal/libzkgroup.so
+			wget -qN https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signallibs_armv7l/libzkgroup.so
+			wget -qN https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signallibs_armv7l/libsignal_jni.so
 			echo "done"
 			echo -n "Updating native x86 since you're on Raspberry..."
 			zip -u $SIGNALPATH/signal/lib/zkgroup-java-*.jar libzkgroup.so
-			#Disable for now since that is only required for 0.7.5+
-			#zip -u $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
-			mv libsignal_jni.so libzkgroup.so $LIBPATH
+			zip -u $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
+			#Use updated libs in jar instead of /usr/lib
+			#mv libsignal_jni.so libzkgroup.so $LIBPATH
+			rm -f $LIBDIR/libzkgroup.so $LIBDIR/libsignal_jni.so
 			echo "done"
 		fi
 		echo "done"

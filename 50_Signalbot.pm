@@ -29,7 +29,10 @@ my %sets = (
   "invite" => "textField",			#Call updategroups with mandatory group name and mandatory list of numbers to join
   "block" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
   "unblock" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
-  "updateGroup" => "textField"		#Call updategroups to rename a group and/or set avatar picture
+  "updateGroup" => "textField",		#Call updategroups to rename a group and/or set avatar picture
+#  "listContacts" => "noArg",
+#  "listGroups" => "noArg",
+  "updateProfile" => "textField"	#my extended Function
  );
 
 my $sep="##"; #Seperator used for splitting message content passed from Child to Parent
@@ -54,35 +57,36 @@ sub Signalbot_Initialize($) {
 												"babblePeer ".
 												"babbleDev ".
 												"babbleExclude ".
+												"authTimeout ".
+												"authDev ".
+												"cmdKeyword ".
 												"$readingFnAttributes";
 }
 ################################### Todo: Set or Attribute for Mode? Other sets needed?
 sub Signalbot_Set($@) {					#
 
-  my ( $hash, $name, @args ) = @_;
-  
-#  Log3 $hash->{NAME}, 5, "Signalbot_Set $name: called "; 
+	my ( $hash, $name, @args ) = @_;
 
-  ### Check Args
-  my $numberOfArgs  = int(@args);
-  return "Signalbot_Set: No cmd specified for set" if ( $numberOfArgs < 1 );
+	### Check Args
+	my $numberOfArgs  = int(@args);
+	return "Signalbot_Set: No cmd specified for set" if ( $numberOfArgs < 1 );
 
-  my $cmd = shift @args;
+	my $cmd = shift @args;
+	my $version = $hash->{helper}{version};
+	if (!exists($sets{$cmd}))  {
+		my @cList;
+		foreach my $k (keys %sets) {
+			my $opts = undef;
+			$opts = $sets{$k};
 
-  if (!exists($sets{$cmd}))  {
-    my @cList;
-    foreach my $k (keys %sets) {
-      my $opts = undef;
-      $opts = $sets{$k};
-
-      if (defined($opts)) {
-        push(@cList,$k . ':' . $opts);
-      } else {
-        push (@cList,$k);
-      }
-    } # end foreach
-    return "Signalbot_Set: Unknown argument $cmd, choose one of " . join(" ", @cList);
-  } # error unknown cmd handling
+			if (defined($opts)) {
+				push(@cList,$k . ':' . $opts);
+			} else {
+				push (@cList,$k);
+			}
+		}
+		return "Signalbot_Set: Unknown argument $cmd, choose one of " . join(" ", @cList);
+	} # error unknown cmd handling
 
 	if ( $cmd eq "refreshGroups") {
 		#Gruppen neu einlesen
@@ -105,6 +109,47 @@ sub Signalbot_Set($@) {					#
 		} else {
 			my $ret=Signalbot_updateGroup($hash,@args);
 			return $ret if defined $ret;
+		}
+		return undef;
+	} elsif ( $cmd eq "updateProfile") {
+		if ($version<=800) {
+			return "updateProfile requires signal-cli 0.8.1 or higher";
+		}
+		if (int(@args)<1 || int(@args)>2 ) {
+			return "Usage: set ".$hash->{NAME}." updateProfile <new name> &[path to thumbnail]";
+		} else {
+			my $ret=Signalbot_updateProfile($hash,@args);
+			return $ret if defined $ret;
+		}
+		return undef;
+	} elsif ( $cmd eq "listContacts") {
+		if ($version<=800) {
+			return "listContacts requires signal-cli 0.8.1 or higher";
+		}
+		my $object=$hash->{helper}{dobject};
+		return "Dbus not initialized" unless defined $object;
+		my $ret;
+		eval { $ret = $object->listContacts();};
+		return "Error getting Contacts:".$@ if $@ && "$@" ne '';
+		my @contacts = @$ret;
+		foreach (@contacts) {
+			my $contact=$_;
+			print "$contact\n";
+		}
+		return undef;
+	} elsif ( $cmd eq "listGroups") {
+		if ($version<=800) {
+			return "listGroups requires signal-cli 0.8.1 or higher";
+		}
+		my $object=$hash->{helper}{dobject};
+		return "Dbus not initialized" unless defined $object;
+		my $ret;
+		eval { $ret = $object->listGroups();};
+		return "Error getting Groups:".$@ if $@ && "$@" ne '';
+		my @contacts = @$ret;
+		foreach (@contacts) {
+			my $contact=$_;
+			print "$contact\n";
 		}
 		return undef;
 	} elsif ( $cmd eq "block" || $cmd eq "unblock") {
@@ -254,12 +299,69 @@ sub Signalbot_Set($@) {					#
 			readingsSingleUpdate($hash, 'contactList', $clist,0);
 		}
 	}
-  	return undef;
+	return undef;
 }
 ################################### 
 sub Signalbot_Get($@) {
 	#Nothing to be done here, let all updates run asychroniously with timers
 	return undef;
+}
+
+sub Signalbot_command($@){
+	my ($hash, $sender, $message) = @_;
+	
+	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Check Command $sender $message";
+	my $timeout=AttrVal($hash->{NAME},"authTimeout",0);
+	return if $timeout==0;
+	my $device=AttrVal($hash->{NAME},"authDev",undef);
+	return unless defined $device;
+	my $cmd=AttrVal($hash->{NAME},"cmdKeyword",undef);
+	return unless defined $cmd;
+	my @arr=();
+	if ($message =~ /^$cmd(.*)/) {
+		$cmd=$1;
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Command received:$cmd";
+		if ($cmd =~ /\d+ (.*)$/) {
+			#This could be a token
+			my $restcmd=$1;
+			my $ret = gAuth($device,$cmd);
+			if ($ret == 1) {
+				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Token valid for sender $sender for $timeout seconds";
+				$hash->{helper}{auth}{$sender}=1;
+				InternalTimer(gettimeofday() + $timeout, 'SignalBot_authTimeout', "$hash->{NAME} $sender", 0);
+				Signalbot_sendMessage($hash,$sender,"","You have control for ".$timeout."s");
+				$cmd=$restcmd;
+			} else {
+				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Invalid token for sender $sender";
+				$hash->{helper}{auth}{$sender}=0;
+				Signalbot_sendMessage($hash,$sender,"","Invalid token");
+				return 1;
+			}
+		}
+		return 1 if $cmd eq "";
+		if ($hash->{helper}{auth}{$sender}==1) {
+			my $error = AnalyzeCommand($hash, $cmd);
+			if (defined $error) {
+				Signalbot_sendMessage($hash,$sender,"",$error);
+			} else {
+				Signalbot_sendMessage($hash,$sender,"","Done");
+			}
+		} else {
+			Signalbot_sendMessage($hash,$sender,"","You are not authorized to execute commands");
+		}
+		return 1;
+	}
+   return undef;
+}
+
+#Reset auth after timeout
+sub SignalBot_authTimeout($@) {
+	my ($val)=@_;
+	print $val."\n";
+	my ($name,$sender)=split(" ",$val);
+	my $hash = $defs{$name};
+	print $name."-".$sender."\n";
+	$hash->{helper}{auth}{$sender}=0;
 }
 
 sub Signalbot_message_callback {
@@ -291,6 +393,10 @@ sub Signalbot_message_callback {
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.":Issue with resolving contact $source\n";
 		$sender=$source;
 	}
+	
+	#Check if for command execution
+	my $auth=Signalbot_command($hash,$source,$message);
+	return if defined $auth;
 	
 	my $senderRegex = quotemeta($sender);
 	#Also check the untranslated sender names in case these were used in allowedPeer instead of the real names
@@ -376,7 +482,7 @@ sub Signalbot_sync_callback {
 }
 
 sub Signalbot_disconnect($@) {
-    my ($hash) = @_;
+	my ($hash) = @_;
 	my $name=$hash->{NAME};
 	eval { 
 		if ($hash->{helper}{dbus} ) {
@@ -420,7 +526,7 @@ sub Signalbot_disconnect($@) {
 }
 
 sub Signalbot_setup($@){
-    my ($hash) = @_;
+	my ($hash) = @_;
 	my $name=$hash->{NAME};
 	if (defined $hash->{helper}{dbus}) {
 		#Reinitialize everything to avoid double callbacks and other issues
@@ -465,23 +571,23 @@ sub Signalbot_setup($@){
 
 	#Set a very short timer that guarantees that the $reactor->step() function still immediately returns when there is nothing to do.
 	$hash->{helper}{timer} = $reactor->add_timeout(1,
-       Net::DBus::Callback->new(method => sub {
+	   Net::DBus::Callback->new(method => sub {
 	      #Do nothing
 		})) unless defined $hash->{helper}{timer}; 	
 	my $count = 0;
 	my $fds=undef;
-    foreach (keys %{$reactor->{fds}->{read}}) {
+	foreach (keys %{$reactor->{fds}->{read}}) {
 	next unless $reactor->{fds}->{read}->{$_}->{enabled};
 	$fds=$_;
 	$count++;
-    }
+	}
 	return "Error getting Dbus filehandler" unless defined $fds;
 	if ($count!=1) {
 	Log3 $name, 5, "$name: Unexpected number of filehandles";
 	}
 	Log3 $name, 5, "$name: Initializing Dbus with filehandle $fds";
 	$hash->{FD}=$fds;
-    $selectlist{"$name.dbus"} = $hash;
+	$selectlist{"$name.dbus"} = $hash;
 	$hash->{STATE}="Connected";
 	
 	#Restore contactlist into internal hash
@@ -493,23 +599,36 @@ sub Signalbot_setup($@){
 			$hash->{helper}{contacts}{$k}=$v;
 		}
 	}
+	my $version;
+	eval {
+		$version=$object->version();
+	}; if ($@) {$version="0.8.00"; }
+	my @ver=split('\.',$version);
+	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
+	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
+	if ($hash->{helper}{version}>800) {
+		readingsSingleUpdate($hash, 'signalVersion', $version,0);
+	}  else {
+		#No version info for 0.8.0 and older
+		readingsSingleUpdate($hash, 'signalVersion', "0.8.0 or older",0);
+	}
 	return undef;
 }
 
 sub Signalbot_Read($@){
-    my ($hash) = @_;
+	my ($hash) = @_;
 	my $reactor=$hash->{helper}{dreactor};
 	return "Error Dbus rector not set" unless defined $reactor;
 	#Set a timer to avoid that 
 
 	$reactor->{running} = 1; #Otherwise step won't read anything and we have a endless loop calling this again
-    $reactor->step(); #Step twice just in case there is more queued up. There is no way I know of to check if the queue is empty already
-    $reactor->step();
+	$reactor->step(); #Step twice just in case there is more queued up. There is no way I know of to check if the queue is empty already
+	$reactor->step();
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Read from Dbus done";
 }
 
 sub Signalbot_getContactName($@) {
-    my ( $hash,$number) = @_;
+	my ( $hash,$number) = @_;
 
 	#check internal inventory
 	my $contact=$hash->{helper}{contacts}{$number};
@@ -530,7 +649,7 @@ sub Signalbot_getContactName($@) {
 
 #Allow create only for new groups
 sub Signalbot_updateGroup($@) {
-    my ( $hash,@args) = @_;
+	my ( $hash,@args) = @_;
 	my $groupname = shift @args;
 	if ($groupname =~ /^#(.*)/) {
 		$groupname=$1;
@@ -579,8 +698,33 @@ sub Signalbot_updateGroup($@) {
 	return Signalbot_Refreshgroups($hash);
 }
 
+sub Signalbot_updateProfile($@) {
+	my ($hash,@args) = @_;
+	my $avatar;
+	my $newname;
+	while (my $next = shift @args) {
+		if ($next =~ /^\&(.*)/) {
+			$avatar=$1;
+		} else {
+			$newname=$next;
+		}
+	}
+	if (defined $avatar) {
+		return "Can't find file $avatar" unless ( -e $avatar);
+		Log3 $hash->{NAME}, 5, $hash->{NAME}.": updateProfile Avatar $avatar";
+		my $size = -s $avatar;
+		return "Please reduce the size of your group picture to <2MB" if ($size>2000000);
+	}
+	my $object=$hash->{helper}{dobject};
+	return "Dbus not initialized" unless defined $object;
+	eval {
+	#new name, about, emoji, avatar, removeAvatar
+		my $ret = $object->updateProfile($newname,undef,undef,$avatar,0);
+	}; return "Error updating profile:".$@ if $@ && "$@" ne '';
+}
+
 sub Signalbot_invite($@) {
-    my ( $hash,$groupname,@contacts) = @_;
+	my ( $hash,$groupname,@contacts) = @_;
 
 	my @members=();
 	while (@contacts) {
@@ -606,7 +750,7 @@ sub Signalbot_invite($@) {
 }
 
 sub Signalbot_setBlocked($@) {
-    my ( $hash,$name,$blocked) = @_;
+	my ( $hash,$name,$blocked) = @_;
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;
 	if ($name =~ /^#(.*)/) {
@@ -626,7 +770,7 @@ sub Signalbot_setBlocked($@) {
 }
 
 sub Signalbot_setContactName($@) {
-    my ( $hash,$number,$name) = @_;
+	my ( $hash,$number,$name) = @_;
 
 	if (!defined $number || !defined $name || $number eq "" || $name eq "") {
 		return "setContactName: Number and Name required";
@@ -647,7 +791,7 @@ sub Signalbot_setContactName($@) {
 }
 
 sub Signalbot_translateContact($@) {
-    my ($hash,$contact) = @_;
+	my ($hash,$contact) = @_;
 	#if contact looks like a number +..... just return it so this can even be called transparently for numbers and contact names
 	return $contact if ( $contact =~ /^\+/ );
 	my $con=$hash->{helper}{contacts};
@@ -655,12 +799,12 @@ sub Signalbot_translateContact($@) {
 	foreach my $key (keys %{$con}) {
 		my $val=$con->{$key};
 		return $key if $val eq $contact;		
-    }
+	}
 	return undef;
 }
 
 sub Signalbot_translateGroup($@) {
-    my ($hash, $groupID) = @_;
+	my ($hash, $groupID) = @_;
 	my $groups=$hash->{helper}{groups};
 	
 	#Don't try to translate empty groupname
@@ -669,7 +813,7 @@ sub Signalbot_translateGroup($@) {
 	foreach my $key (keys %{$groups}) {
 		my $val=$groups->{$key};
 		return $key if $val eq $groupID;		
-    }
+	}
 	#Group not found, so check if we simply don't know it yet
 	my $ret;
 	$ret=Signalbot_Refreshgroups($hash) if ($init_done);
@@ -679,12 +823,12 @@ sub Signalbot_translateGroup($@) {
 	foreach my $key (keys %{$groups}) {
 		my $val=$groups->{$key};
 		return $key if $val eq $groupID;		
-    }
+	}
 	return "Unknown group";
 }
 
 sub Signalbot_getNumber($@) {
-    my ( $hash,$rec) = @_;
+	my ( $hash,$rec) = @_;
 	my @recipient= split(/,/,$rec);
 	
 	#Das klappt nicht - kann man die Contacts nicht abfragen????
@@ -703,7 +847,7 @@ sub Signalbot_getNumber($@) {
 }
 
 sub Signalbot_Refreshgroups($@) {
-    my ( $hash ) = @_;
+	my ( $hash ) = @_;
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;
 
@@ -726,7 +870,7 @@ sub Signalbot_Refreshgroups($@) {
 }
 
 sub Signalbot_sendMessage($@) {
-    my ( $hash,$rec,$att,$mes ) = @_;
+	my ( $hash,$rec,$att,$mes ) = @_;
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": sendMessage called for $rec:$att:$mes"; 
 
 	my @recorg= split(/,/,$rec);
@@ -740,7 +884,7 @@ sub Signalbot_sendMessage($@) {
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;
 
-    eval { $object->sendMessage($mes,\@attach,\@recipient); };
+	eval { $object->sendMessage($mes,\@attach,\@recipient); };
 	return "Error sending message:".$@ if $@;
 	readingsBeginUpdate($hash);
 	readingsBulkUpdate($hash, "sentMsg", encode_utf8($mes));
@@ -769,7 +913,7 @@ sub Signalbot_getGroup($@) {
 }
 
 sub Signalbot_sendGroupMessage($@) {
-    my ( $hash,$rec,$att,$mes ) = @_;
+	my ( $hash,$rec,$att,$mes ) = @_;
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": sendGroupMessage called for $rec:$att:$mes"; 
 
 	$rec=~s/#//g;
@@ -801,28 +945,28 @@ sub Signalbot_Execute($@) {
 
 ################################### 
 sub Signalbot_Attr(@) {					#
- my ($command, $name, $attr, $val) = @_;
- my $hash = $defs{$name};
- my $msg = undef;
+	my ($command, $name, $attr, $val) = @_;
+	my $hash = $defs{$name};
+	my $msg = undef;
 
-  if ($attr eq 'poll_interval') {
-    if ( defined($val) ) {
-      if ( looks_like_number($val) && $val >= 0) {
-        RemoveInternalTimer($hash);
-        InternalTimer(gettimeofday()+1, 'Signalbot_Execute', $hash, 0) if $val>0;
-      } else {
-        $msg = "$hash->{NAME}: Wrong poll intervall defined. poll_interval must be a number >= 0";
-      }    
-    } else {
-      RemoveInternalTimer($hash);
-    }
-  }	elsif($attr eq "allowedPeer") {
+	if ($attr eq 'poll_interval') {
+	if ( defined($val) ) {
+	  if ( looks_like_number($val) && $val >= 0) {
+		RemoveInternalTimer($hash);
+		InternalTimer(gettimeofday()+1, 'Signalbot_Execute', $hash, 0) if $val>0;
+		} else {
+		$msg = "$hash->{NAME}: Wrong poll intervall defined. poll_interval must be a number >= 0";
+		}
+	} else {
+		RemoveInternalTimer($hash);
+	}
+	}	elsif($attr eq "allowedPeer") {
 	#Take over as is
 	return undef;
-  }	elsif($attr eq "babbleExclude") {
+	}	elsif($attr eq "babbleExclude") {
 	#Take over as is
 	return undef;
-  } elsif($attr eq "babblePeer") {
+	} elsif($attr eq "babblePeer") {
 	#Take over as is
 	my $bDevice=AttrVal($hash->{NAME},"babbleDev",undef);
 	if (!defined $bDevice && $init_done) {
@@ -834,37 +978,56 @@ sub Signalbot_Attr(@) {					#
 		}
 	}
 	return undef;
-  } elsif($attr eq "babbleDev") {
-	return undef unless (defined $val && $val ne "" && $init_done);
-	my $bhash = $defs{$val};
-	return "Not a Babble device $val" unless $bhash->{TYPE} eq "Babble";
-	return undef;
-  }
-  #check for correct values while setting so we need no error handling later
-  foreach ('xx', 'yy') {
-	if ($attr eq $_) {
-		if ( defined($val) ) {
-			if ( !looks_like_number($val) || $val <= 0) {
-				$msg = "$hash->{NAME}: ".$attr." must be a number > 0";
+	} elsif($attr eq "authTimeout") {
+	#Take over as is
+	my $aDevice=AttrVal($hash->{NAME},"authDev",undef);
+	if (!defined $aDevice && $init_done) {
+		foreach my $dev ( sort keys %main::defs ) {
+			if ($defs{$dev}->{TYPE} eq "GoogleAuth") {
+				CommandAttr(undef,"$name authDev $dev");
+				last;
 			}
 		}
 	}
-  }
-  return $msg;	
+	return undef;
+	} elsif($attr eq "authDev") {
+	return undef unless (defined $val && $val ne "" && $init_done);
+	my $bhash = $defs{$val};
+	return "Not a GoogleAuth device $val" unless $bhash->{TYPE} eq "GoogleAuth";
+	return undef;
+	} elsif($attr eq "cmdKeyword") {
+		return undef;
+	} elsif($attr eq "babbleDev") {
+		return undef unless (defined $val && $val ne "" && $init_done);
+		my $bhash = $defs{$val};
+		return "Not a Babble device $val" unless $bhash->{TYPE} eq "Babble";
+		return undef;
+	}
+	#check for correct values while setting so we need no error handling later
+	foreach ('xx', 'yy') {
+		if ($attr eq $_) {
+			if ( defined($val) ) {
+				if ( !looks_like_number($val) || $val <= 0) {
+					$msg = "$hash->{NAME}: ".$attr." must be a number > 0";
+				}
+			}
+		}
+	}
+	return $msg;	
 }
 
 sub Signalbot_Notify($$) {
-  my ($own_hash, $dev_hash) = @_;
-  my $ownName = $own_hash->{NAME}; # own name / hash
+	my ($own_hash, $dev_hash) = @_;
+	my $ownName = $own_hash->{NAME}; # own name / hash
 
-  return "" if(IsDisabled($ownName)); # Return without any further action if the module is disabled
+	return "" if(IsDisabled($ownName)); # Return without any further action if the module is disabled
 
-  my $devName = $dev_hash->{NAME}; # Device that created the events
-  my $events = deviceEvents($dev_hash,1);
-  
-  if ($devName eq "global" and grep(m/^INITIALIZED|REREADCFG$/, @{$events})) {
-	  Signalbot_Init($own_hash,"");
-  }
+	my $devName = $dev_hash->{NAME}; # Device that created the events
+	my $events = deviceEvents($dev_hash,1);
+
+	if ($devName eq "global" and grep(m/^INITIALIZED|REREADCFG$/, @{$events})) {
+		Signalbot_Init($own_hash,"");
+	}
 }
 
 ################################### 
@@ -1014,32 +1177,32 @@ sub SignalBot_replaceCommands(@) {
 # and extension without dot as 2nd list element
 
 sub SignalBot_IdentifyStream($$) {
-  my ($hash, $msg) = @_;
+	my ($hash, $msg) = @_;
 
-  # signatures for media files are documented here --> https://en.wikipedia.org/wiki/List_of_file_signatures
-  # seems sometimes more correct: https://wangrui.wordpress.com/2007/06/19/file-signatures-table/
-  return (-1,"png") if ( $msg =~ /^\x89PNG\r\n\x1a\n/ );    # PNG
-  return (-1,"jpg") if ( $msg =~ /^\xFF\xD8\xFF/ );    # JPG not necessarily complete, but should be fine here
-  
-  return (-2 ,"mp3") if ( $msg =~ /^\xFF\xF3/ );    # MP3    MPEG-1 Layer 3 file without an ID3 tag or with an ID3v1 tag
-  return (-2 ,"mp3") if ( $msg =~ /^\xFF\xFB/ );    # MP3    MPEG-1 Layer 3 file without an ID3 tag or with an ID3v1 tag
-  
-  # MP3    MPEG-1 Layer 3 file with an ID3v2 tag 
-  #   starts with ID3 then version (most popular 03, new 04 seldom used, old 01 and 02) ==> Only 2,3 and 4 are tested currently
-  return (-2 ,"mp3") if ( $msg =~ /^ID3\x03/ );    
-  return (-2 ,"mp3") if ( $msg =~ /^ID3\x04/ );    
-  return (-2 ,"mp3") if ( $msg =~ /^ID3\x02/ );    
+	# signatures for media files are documented here --> https://en.wikipedia.org/wiki/List_of_file_signatures
+	# seems sometimes more correct: https://wangrui.wordpress.com/2007/06/19/file-signatures-table/
+	return (-1,"png") if ( $msg =~ /^\x89PNG\r\n\x1a\n/ );    # PNG
+	return (-1,"jpg") if ( $msg =~ /^\xFF\xD8\xFF/ );    # JPG not necessarily complete, but should be fine here
 
-  return (-3,"pdf") if ( $msg =~ /^%PDF/ );    # PDF document
-  return (-3,"docx") if ( $msg =~ /^PK\x03\x04/ );    # Office new
-  return (-3,"docx") if ( $msg =~ /^PK\x05\x06/ );    # Office new
-  return (-3,"docx") if ( $msg =~ /^PK\x07\x08/ );    # Office new
-  return (-3,"doc") if ( $msg =~ /^\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1/ );    # Office old - D0 CF 11 E0 A1 B1 1A E1
+	return (-2 ,"mp3") if ( $msg =~ /^\xFF\xF3/ );    # MP3    MPEG-1 Layer 3 file without an ID3 tag or with an ID3v1 tag
+	return (-2 ,"mp3") if ( $msg =~ /^\xFF\xFB/ );    # MP3    MPEG-1 Layer 3 file without an ID3 tag or with an ID3v1 tag
 
-  return (-4,"mp4") if ( $msg =~ /^....\x66\x74\x79\x70\x69\x73\x6F\x6D/ );    # MP4 according to Wikipedia
-  return (-4,"mpg") if ( $msg =~ /^\x00\x00\x01[\xB3\xBA]/ );    # MPG according to Wikipedia
-  
-  return (0,"txt");
+	# MP3    MPEG-1 Layer 3 file with an ID3v2 tag 
+	#   starts with ID3 then version (most popular 03, new 04 seldom used, old 01 and 02) ==> Only 2,3 and 4 are tested currently
+	return (-2 ,"mp3") if ( $msg =~ /^ID3\x03/ );    
+	return (-2 ,"mp3") if ( $msg =~ /^ID3\x04/ );    
+	return (-2 ,"mp3") if ( $msg =~ /^ID3\x02/ );    
+
+	return (-3,"pdf") if ( $msg =~ /^%PDF/ );    # PDF document
+	return (-3,"docx") if ( $msg =~ /^PK\x03\x04/ );    # Office new
+	return (-3,"docx") if ( $msg =~ /^PK\x05\x06/ );    # Office new
+	return (-3,"docx") if ( $msg =~ /^PK\x07\x08/ );    # Office new
+	return (-3,"doc") if ( $msg =~ /^\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1/ );    # Office old - D0 CF 11 E0 A1 B1 1A E1
+
+	return (-4,"mp4") if ( $msg =~ /^....\x66\x74\x79\x70\x69\x73\x6F\x6D/ );    # MP4 according to Wikipedia
+	return (-4,"mpg") if ( $msg =~ /^\x00\x00\x01[\xB3\xBA]/ );    # MPG according to Wikipedia
+
+	return (0,"txt");
 }
 
 1;

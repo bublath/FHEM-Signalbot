@@ -1,5 +1,5 @@
 ##############################################
-# $Id:1.2$
+# $Id:1.3$
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -321,13 +321,17 @@ sub Signalbot_command($@){
 	if ($message =~ /^$cmd(.*)/) {
 		$cmd=$1;
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Command received:$cmd";
-		if ($cmd =~ /\d+ (.*)$/) {
+		my @cc=split(" ",$cmd);
+		if (@cc[0] =~ /\d+$/) {
 			#This could be a token
-			my $restcmd=$1;
-			my $ret = gAuth($device,$cmd);
+			my $token=shift @cc;
+			my $restcmd=join(" ",@cc);
+			my $ret = gAuth($device,$token);
 			if ($ret == 1) {
 				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Token valid for sender $sender for $timeout seconds";
 				$hash->{helper}{auth}{$sender}=1;
+				#Remove potential old timer so countdown start from scratch
+				RemoveInternalTimer("$hash->{NAME} $sender");
 				InternalTimer(gettimeofday() + $timeout, 'SignalBot_authTimeout', "$hash->{NAME} $sender", 0);
 				Signalbot_sendMessage($hash,$sender,"","You have control for ".$timeout."s");
 				$cmd=$restcmd;
@@ -357,10 +361,8 @@ sub Signalbot_command($@){
 #Reset auth after timeout
 sub SignalBot_authTimeout($@) {
 	my ($val)=@_;
-	print $val."\n";
 	my ($name,$sender)=split(" ",$val);
 	my $hash = $defs{$name};
-	print $name."-".$sender."\n";
 	$hash->{helper}{auth}{$sender}=0;
 }
 

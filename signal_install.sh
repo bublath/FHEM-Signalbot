@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:1.4$"
+SCRIPTVERSION="$Id:1.5$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -16,12 +16,16 @@ DBSYSTEMS=/usr/share/dbus-1/system-services
 SYSTEMD=/etc/systemd/system
 LOG=/tmp/signal_install.log
 TMPFILE=/tmp/signal$$.tmp
+VIEWER=eog
 DBVER=1.2.0
 OPERATION=$1
 
 if [ -n "$2" ]; then
 	PHONE=$2
 fi
+
+#Make sure picture viewer exists
+VIEWER=`which $VIEWER`
 
 #Get OS data
 if [ -e /etc/os-release ]; then
@@ -135,7 +139,7 @@ check_and_compare_file() {
 		if ! [ -z "$DIFF" ]; then
 			echo "$CHECK differs, update (Y/n)? "
 			read REPLY
-			if [ "$REPLY" = "y" ]; then
+			if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
 				cp $COMPARE $CHECK
 				echo "$CHECK updated"
 			else 
@@ -447,6 +451,20 @@ start_service() {
 	fi
 }
 
+display_qr() {
+ COUNT=0;
+ while [ ! -e /tmp/qrcode.png ]
+ do
+	sleep 1
+	((COUNT++))
+	if [ $COUNT -gt 60 ]; then
+		break
+	fi
+done
+if [ -e /tmp/qrcode.png ] && [ -n $VIEWER ]; then
+	$VIEWER /tmp/qrcode.png 2>/dev/null
+fi
+}
 
 link_device() {
 cd $SIGNALPATH/signal/bin
@@ -456,6 +474,8 @@ echo "Open PNG in /tmp/qrcode.png that will appear in a couple of seconds and sc
 echo "Process will continue after successfully scanning qrcode and accepting link"
 echo "If you take too long, it will timeout and needs to be repeated"
 stop_service
+rm -f /tmp/qrcode.png
+display_qr &
 sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR link -n `hostname` | xargs -L 1 qrencode -o /tmp/qrcode.png
 
 echo "Reading account data"
@@ -680,22 +700,24 @@ if [ -z "$OPERATION" ] || [ $OPERATION = "all" ]; then
 		if [ -e $SIGNALVAR/data/$PHONE ]; then
 			echo "Your device $PHONE is already configured, do want to run through registration again?"
 		else
-			echo "You already seem to have a device configured, add $PHONE instead?"
+			echo "You already seem to have a device configured, add $PHONE additionally?"
 		fi
-		echo -n "Continue (y) or skip (N)?"
-		read REPLY	
-		if [ "$REPLY" = "y" ]; then
-			echo "You can either"
-			echo "(r) register a new device (if that device is already registered e.g. to a smartphone that will be removed)"
-			echo "(l) link to an already registered device (both device will get the messages)"
-			echo "It is recommended to register a new device e.g. a land-line for usage with FHEM"
-			echo -n "register or link (r/l)"
-			read REPLY
-			if [ "$REPLY" = "r" ]; then
-				register_device
-			elif [ "$REPLY" = "l" ]; then
-				link_device
-			fi
+	else 
+		echo "No device configuration found, starting process for $PHONE"
+	fi
+	echo -n "Continue (y) or skip (N)?"
+	read REPLY	
+	if [ "$REPLY" = "y" ]; then
+		echo "You can either"
+		echo "(r) register a new device (if that device is already registered e.g. to a smartphone that will be removed)"
+		echo "(l) link to an already registered device (both device will get the messages)"
+		echo "It is recommended to register a new device e.g. a land-line for usage with FHEM"
+		echo -n "register or link (r/l)"
+		read REPLY
+		if [ "$REPLY" = "r" ]; then
+			register_device
+		elif [ "$REPLY" = "l" ]; then
+			link_device
 		fi
 	fi
 fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:1.5$"
+SCRIPTVERSION="$Id:1.6$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -542,15 +542,18 @@ echo "If the recipient got the messages, your setup looks healthy and you're rea
 }
 
 name_user() {
-echo "Please are name for your Signal User with number $PHONE (You have to update the name if you want to set a picture!)"
+echo "Please chose a name for your Signal User with number $PHONE (You have to update the name if you want to set a picture!)"
 echo -n "Name:"
 read REPLY
 NAME=$REPLY
 echo "Please provide a filename to a picture to be used as avatar for your user (press return to keep unchanged)"
 echo -n "File:"
-read REPLY
-AVATAR=`pwd`/$REPLY
+read AVATAR
 if [ -n "$AVATAR" ]; then
+	if ! [[ "$AVATAR" =~ ^/ ]]; then
+		#relative path - add current directory
+		AVATAR=`pwd`/$AVATAR
+	fi
 	if ! [ -e "$AVATAR" ]; then
 		echo "File $AVATAR was not found"
 		return
@@ -716,6 +719,8 @@ if [ -z "$OPERATION" ] || [ $OPERATION = "all" ]; then
 		read REPLY
 		if [ "$REPLY" = "r" ]; then
 			register_device
+			echo "In order to use V2 groups with Signal, your registered user needs a name"
+			name_user
 		elif [ "$REPLY" = "l" ]; then
 			link_device
 		fi

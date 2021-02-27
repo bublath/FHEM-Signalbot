@@ -30,8 +30,10 @@ my %sets = (
   "block" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
   "unblock" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
   "updateGroup" => "textField",		#Call updategroups to rename a group and/or set avatar picture
-#  "listContacts" => "noArg",
-#  "listGroups" => "noArg",
+  "listNumbers" => "noArg",
+  "getContactNumber" => "textField",
+  "quitGroup" => "textField",
+  "joinGroup" => "textField",
   "updateProfile" => "textField"	#my extended Function
  );
 
@@ -60,6 +62,8 @@ sub Signalbot_Initialize($) {
 												"authTimeout ".
 												"authDev ".
 												"cmdKeyword ".
+												"workaround:0,1 ".
+												"autoJoin:yes,no ".
 												"$readingFnAttributes";
 }
 ################################### Todo: Set or Attribute for Mode? Other sets needed?
@@ -122,36 +126,55 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
-	} elsif ( $cmd eq "listContacts") {
+	} elsif ( $cmd eq "listNumbers") {
 		if ($version<=800) {
-			return "listContacts requires signal-cli 0.8.1 or higher";
+			return $cmd." requires signal-cli 0.8.1 or higher";
 		}
 		my $object=$hash->{helper}{dobject};
 		return "Dbus not initialized" unless defined $object;
 		my $ret;
-		eval { $ret = $object->listContacts();};
-		return "Error getting Contacts:".$@ if $@ && "$@" ne '';
+		eval { $ret = $object->listNumbers();};
+		return "Error getting Numbers:".$@ if $@ && "$@" ne '';
 		my @contacts = @$ret;
 		foreach (@contacts) {
 			my $contact=$_;
 			print "$contact\n";
 		}
 		return undef;
-	} elsif ( $cmd eq "listGroups") {
+	} elsif ( $cmd eq "getContactNumber") {
 		if ($version<=800) {
-			return "listGroups requires signal-cli 0.8.1 or higher";
+			return $cmd." requires signal-cli 0.8.1 or higher";
+		}
+		if (int(@args)!=1) {
+			return "Usage: set ".$hash->{NAME}." ".$cmd." <contact name>";
 		}
 		my $object=$hash->{helper}{dobject};
 		return "Dbus not initialized" unless defined $object;
 		my $ret;
-		eval { $ret = $object->listGroups();};
-		return "Error getting Groups:".$@ if $@ && "$@" ne '';
-		my @contacts = @$ret;
-		foreach (@contacts) {
-			my $contact=$_;
-			print "$contact\n";
-		}
+		eval { $ret = $object->getContactNumber($args[0]);};
+		return "Error getting Number for $args[0]:".$@ if $@ && "$@" ne '';
+		print "$ret\n";
 		return undef;
+	} elsif ( $cmd eq "quitGroup") {
+		if ($version<=800) {
+			return $cmd." requires signal-cli 0.8.1 or higher";
+		}
+		if (int(@args)!=1) {
+			return "Usage: set ".$hash->{NAME}." ".$cmd." <group name>";
+		}
+		my $object=$hash->{helper}{dobject};
+		return "Dbus not initialized" unless defined $object;
+		my $ret;
+		my @group=Signalbot_getGroup($hash,$args[0]);
+		return join(" ",@group) unless int(@group)>1;
+		eval { $ret = $object->quitGroup(\@group);};
+		return "Can't quit group $args[0]:".$@ if $@ && "$@" ne '';
+		return undef;
+	} elsif ( $cmd eq "joinGroup") {
+		if (int(@args)!=1) {
+			return "Usage: set ".$hash->{NAME}." ".$cmd." <group link>";
+		}
+		return Signalbot_join($hash,$args[0]);
 	} elsif ( $cmd eq "block" || $cmd eq "unblock") {
 		if (int(@args)!=1) {
 			return "Usage: set ".$hash->{NAME}." ".$cmd." <group name>|<contact>";
@@ -322,7 +345,7 @@ sub Signalbot_command($@){
 		$cmd=$1;
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Command received:$cmd";
 		my @cc=split(" ",$cmd);
-		if (@cc[0] =~ /\d+$/) {
+		if ($cc[0] =~ /\d+$/) {
 			#This could be a token
 			my $token=shift @cc;
 			my $restcmd=join(" ",@cc);
@@ -400,6 +423,13 @@ sub Signalbot_message_callback {
 	my $auth=Signalbot_command($hash,$source,$message);
 	return if defined $auth;
 	
+	my $join=AttrVal($hash->{NAME},"autoJoin","no");
+	if ($join eq "yes") {
+		if ($message =~ /^https:\/\/signal.group\//) {
+			return Signalbot_join($message);
+		}
+	}
+	
 	my $senderRegex = quotemeta($sender);
 	#Also check the untranslated sender names in case these were used in allowedPeer instead of the real names
 	my $sourceRegex = quotemeta($source);
@@ -423,6 +453,9 @@ sub Signalbot_message_callback {
 		readingsBulkUpdate($hash, "msgText", $message);
 		readingsBulkUpdate($hash, "msgSender", $sender);
 		readingsBulkUpdate($hash, "msgGroupName", $group);
+		my $auth=0;
+		if (defined $hash->{helper}{auth}{$sender}) { $auth=$hash->{helper}{auth}{$sender}; }
+		readingsBulkUpdate($hash, "msgAuth", $auth);
 		readingsEndUpdate($hash, 1);
 
 		my $bDevice=AttrVal($hash->{NAME},"babbleDev",undef);
@@ -604,7 +637,10 @@ sub Signalbot_setup($@){
 	my $version;
 	eval {
 		$version=$object->version();
-	}; if ($@) {$version="0.8.00"; }
+		print $version."\n";
+	}; if ($@) {$version="0.8.00"; print $@."\n";} 
+	if ($version eq "0.8.0") {$version="0.8.1";} #for beta release
+	print $version."\n";
 	my @ver=split('\.',$version);
 	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
 	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
@@ -723,6 +759,21 @@ sub Signalbot_updateProfile($@) {
 	#new name, about, emoji, avatar, removeAvatar
 		my $ret = $object->updateProfile($newname,undef,undef,$avatar,0);
 	}; return "Error updating profile:".$@ if $@ && "$@" ne '';
+}
+
+sub Signalbot_join($@) {
+	my ( $hash,$grouplink) = @_;
+	my $version = $hash->{helper}{version};
+	if ($version<=800) {
+		return "Joining groups requires signal-cli 0.8.1 or higher";
+	}
+
+	my $object=$hash->{helper}{dobject};
+	return "Dbus not initialized" unless defined $object;
+	my $ret;
+	eval { $ret = $object->joinGroup($grouplink);};
+	return "Can't join group:".$@ if $@ && "$@" ne '';
+	return undef;
 }
 
 sub Signalbot_invite($@) {
@@ -885,9 +936,18 @@ sub Signalbot_sendMessage($@) {
 	}
 	my $object=$hash->{helper}{dobject};
 	return "Dbus not initialized" unless defined $object;
-
-	eval { $object->sendMessage($mes,\@attach,\@recipient); };
-	return "Error sending message:".$@ if $@;
+	print $mes.join(":",@attach).join(";",@recipient)."\n";
+	my $workaround =AttrVal($hash->{NAME},"workaround",0);
+	if ($workaround==0) {
+		eval { $object->sendMessage($mes,\@attach,\@recipient); };
+		return "Error sending message:".$@ if $@;
+	} else {
+		#Workaround if Net::DBus chooses the wrong method
+		foreach (@recipient) {
+			eval { $object->sendMessage($mes,\@attach,$_); };
+			return "Error sending message:".$@ if $@;
+		}
+	}
 	readingsBeginUpdate($hash);
 	readingsBulkUpdate($hash, "sentMsg", encode_utf8($mes));
 	readingsBulkUpdate($hash, 'sentMsgTimestamp', "pending");

@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:1.6$"
+SCRIPTVERSION="$Id:2.0$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -9,7 +9,7 @@ fi
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.8.0"
+SIGNALVERSION="0.8.1"
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -17,7 +17,7 @@ SYSTEMD=/etc/systemd/system
 LOG=/tmp/signal_install.log
 TMPFILE=/tmp/signal$$.tmp
 VIEWER=eog
-DBVER=1.2.0
+DBVER=0.16
 OPERATION=$1
 
 if [ -n "$2" ]; then
@@ -209,8 +209,8 @@ install_and_check diff diffutils
 install_and_check dbus-send dbus
 install_and_check cpan cpanminus
 install_and_check qrencode qrencode
-install_and_check pkg-config pkg-config
-install_and_check gcc gcc
+#install_and_check pkg-config pkg-config
+#install_and_check gcc gcc
 install_and_check zip zip
 if [ -z "$BASH" ]; then
 	echo "This script requires bash for some functions. Check if bash is installed."
@@ -221,13 +221,13 @@ fi
 
 #For DBus check a number of Perl modules on file level
 install_by_file /usr/include/dbus-1.0/dbus/dbus.h libdbus-1-dev
-install_by_file /usr/share/perl5/Test/CPAN/Changes.pm libcpan-changes-perl
-install_by_file /usr/include/expat.h libexpat1-dev
-install_by_file /usr/share/doc-base/libxml-parser-perl libxml-parser-perl
-install_by_file /usr/share/doc/libtemplate-perl libtemplate-perl
-install_by_file /usr/share/doc/libxml-xpath-perl libxml-xpath-perl
-install_by_file /usr/share/build-essential/essential-packages-list build-essential
-install_by_file /usr/share/doc/libxml-twig-perl xml-twig-tools
+#install_by_file /usr/share/perl5/Test/CPAN/Changes.pm libcpan-changes-perl
+#install_by_file /usr/include/expat.h libexpat1-dev
+#install_by_file /usr/share/doc-base/libxml-parser-perl libxml-parser-perl
+#install_by_file /usr/share/doc/libtemplate-perl libtemplate-perl
+#install_by_file /usr/share/doc/libxml-xpath-perl libxml-xpath-perl
+#install_by_file /usr/share/build-essential/essential-packages-list build-essential
+#install_by_file /usr/share/doc/libxml-twig-perl xml-twig-tools
 install_by_file /usr/share/doc/libimage-librsvg-perl libimage-librsvg-perl
 
 cat >$TMPFILE <<EOF
@@ -235,8 +235,8 @@ cat >$TMPFILE <<EOF
 use strict;
 use warnings;
 
-use Net::DBus;
-print \$Net::DBus::VERSION."\n";
+use Protocol::DBus;
+print \$Protocol::DBus::VERSION."\n";
 EOF
 
 echo -n "Checking for Net::DBus..."
@@ -247,7 +247,7 @@ if [ "$NETDBUS" = "$DBVER" ]; then
 else
 	export PERL_MM_USE_DEFAULT=1
 	echo -n "Installing latest NET::DBus..."
-	cpan install -f Net::DBus >>$LOG 2>>$LOG
+	cpan install Protocol::DBus >>$LOG 2>>$LOG
 	echo "done"
 fi
 

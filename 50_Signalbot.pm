@@ -13,15 +13,15 @@ package main;
 
 use strict;
 use warnings;
-use Protocol::DBus::Client;
 use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-use Data::Dumper;
+#use Data::Dumper;
 use Time::HiRes qw( usleep );
 
-eval "use Protocol::DBus;1" or my $DBus_missing = "yes";
+eval "use Protocol::DBus;1";
+eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
 
 my %sets = (
   "send" => "textField",
@@ -288,14 +288,12 @@ sub Signalbot_Set($@) {					#
 
 		#Send message to individuals (bulk)
 		if (@recipients > 0) {
-			my $ret=Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
-			return $ret if defined $ret;
+			Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
 		}
 		if (@groups > 0) {
 		#Send message to groups (one at time)
 			while(my $currgroup = shift @groups){
-				my $ret=Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);
-				return $ret if defined $ret;
+				Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);
 			}
 		}
 		#Remove the tempfiles
@@ -391,11 +389,11 @@ sub Signalbot_command($@){
 	
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Check Command $sender $message";
 	my $timeout=AttrVal($hash->{NAME},"authTimeout",0);
-	return if $timeout==0;
+	return $message if $timeout==0;
 	my $device=AttrVal($hash->{NAME},"authDev",undef);
-	return unless defined $device;
+	return $message unless defined $device;
 	my $cmd=AttrVal($hash->{NAME},"cmdKeyword",undef);
-	return unless defined $cmd;
+	return $message unless defined $cmd;
 	my @arr=();
 	if ($message =~ /^$cmd(.*)/) {
 		$cmd=$1;
@@ -418,10 +416,10 @@ sub Signalbot_command($@){
 				Log3 $hash->{NAME}, 3, $hash->{NAME}.": Invalid token for sender $sender";
 				$hash->{helper}{auth}{$sender}=0;
 				Signalbot_sendMessage($hash,$sender,"","Invalid token");
-				return 1;
+				return $cmd;
 			}
 		}
-		return 1 if $cmd eq "";
+		return $cmd if $cmd eq "";
 		if ($hash->{helper}{auth}{$sender}==1) {
 			Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes command $cmd";
 			my $error = AnalyzeCommand($hash, $cmd);
@@ -433,9 +431,9 @@ sub Signalbot_command($@){
 		} else {
 			Signalbot_sendMessage($hash,$sender,"","You are not authorized to execute commands");
 		}
-		return 1;
+		return $cmd;
 	}
-   return undef;
+   return $message;
 }
 
 #Reset auth after timeout
@@ -476,10 +474,6 @@ sub Signalbot_MessageReceived ($@) {
 		$sender=$source;
 	}
 	
-	#Check if for command execution
-	my $auth=Signalbot_command($hash,$source,$message);
-	return if defined $auth;
-	
 	my $join=AttrVal($hash->{NAME},"autoJoin","no");
 	if ($join eq "yes") {
 		if ($message =~ /^https:\/\/signal.group\//) {
@@ -504,12 +498,15 @@ sub Signalbot_MessageReceived ($@) {
 		readingsBulkUpdate($hash, "prevMsgAttachment", ReadingsVal($hash->{NAME}, "msgAttachment", undef)) if defined ReadingsVal($hash->{NAME}, "msgAttachment", undef);
 		readingsEndUpdate($hash, 0);
 
+		$message=Signalbot_command($hash,$source,$message);
+
 		readingsBeginUpdate($hash);
 		readingsBulkUpdate($hash, "msgAttachment", trim($atr));
 		readingsBulkUpdate($hash, "msgTimestamp", strftime("%d-%m-%Y %H:%M:%S", localtime($timestamp/1000)));
 		readingsBulkUpdate($hash, "msgText", $message);
 		readingsBulkUpdate($hash, "msgSender", $sender);
 		readingsBulkUpdate($hash, "msgGroupName", $group);
+		#Check if for command execution
 		my $auth=0;
 		if (defined $hash->{helper}{auth}{$source}) { $auth=$hash->{helper}{auth}{$source}; }
 		readingsBulkUpdate($hash, "msgAuth", $auth);
@@ -810,7 +807,7 @@ sub Signalbot_Call($@) {
 		my $b=$msg->get_body()->[0];
 		readingsSingleUpdate($hash, 'lastError', "Error in $function:".$b,1);
 		}
-	); 
+	);
 }
 
 sub Signalbot_Read($@){
@@ -1220,8 +1217,12 @@ sub Signalbot_Init($$) {				#
 	my ( $hash, $args ) = @_;
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Init: $args";
 	if (defined $DBus_missing) {
-		return "Please make sure that Net::DBus is installed, e.g. by 'sudo cpan install Net::DBus'";
+		$hash->{STATE} ="Please make sure that Protocol::DBus is installed, e.g. by 'sudo cpan install Protocol::DBus'";
+		Log3 $hash->{NAME}, 1, $hash->{NAME}.": Init: $hash->{STATE}";
+		return $hash->{STATE};
 	}
+	Log3 $hash->{NAME}, 4, $hash->{NAME}.": Protocol::DBus version found ".$Protocol::DBus::VERSION;
+	
 	my @a = ();
 	@a = split("[ \t]+", $args) if defined $args;
 	shift @a;shift @a;

@@ -218,7 +218,7 @@ sub Signalbot_Set($@) {					#
 		eval { $fullstring=decode_utf8($fullstring); };
 			Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Error from decode" if $@;
 			
-		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:\n";
+		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:";
 		my $tmpmessage = $fullstring =~ s/\\n/\x0a/r;
 		my @args=parse_line(' ',0,$tmpmessage);
 		
@@ -296,12 +296,14 @@ sub Signalbot_Set($@) {					#
 				Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);
 			}
 		}
-		#Remove the tempfiles
-		foreach my $file (@attachments) {
-			if ($file =~ /tmp\/signalbot/) {
-				unlink $file;
-			}
+		#Remember temp files
+		my @atts = ();
+		my $attstore = $hash->{helper}{attachments};
+		if (defined $attstore) {
+			@atts = @$attstore;
 		}
+		push @atts,@attachments;
+		$hash->{helper}{attachments}=[@atts];
 	} elsif ( $cmd eq "reinit") {
 		my $ret = Signalbot_setup($hash);
 		$hash->{STATE} = $ret if defined $ret;
@@ -544,7 +546,18 @@ sub Signalbot_ReceiptReceived {
 	my ($hash, $timestamp, $source) = @_;
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Signalbot_receive_callback $timestamp $source ";
 	my $sender=Signalbot_getContactName($hash,$source);
-	
+	#Delete temporary files from last message(s)
+	my $attstore = $hash->{helper}{attachments};
+	my @atts = @$attstore;
+	if (@atts>0) {
+		foreach my $file (@atts) {
+			if ($file =~ /tmp\/signalbot/) {
+				unlink $file;
+			}
+		}
+		delete $hash->{helper}{attachments};
+	}
+
 	if (!defined $sender) {
 		Log3 $hash->{NAME}, 3, $hash->{NAME}.":Issue with resolving contact $source\n";
 		$sender=$source;
@@ -614,8 +627,7 @@ sub Signalbot_setup($@){
 	$hash->{helper}{dbuss}=$dbus2;
 	$dbus2->initialize();
 	delete $hash->{helper}{init};
-	$hash->{helper}{serial}{0}="List of DBus serial replies";
-	#$dbus->blocking(0);
+	$dbus->blocking(0);
 	#Get filehandle
 	$hash->{FD}=$dbus->fileno();
 	$selectlist{"$name.dbus"} = $hash;

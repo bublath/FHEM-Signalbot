@@ -457,12 +457,16 @@ sub Signalbot_MessageReceived ($@) {
 		$atr.= $_." " if defined $_;
 	}	
 
+	my @groups=@$groupID;
+
 	if ($message eq "" && @att==0) {
-		#Empty messages happens e.g. if someone leaves a group - ignore
+		#Empty message are sent with a group if group memberships or properties are changed (invite/leave/change name) - update membership
+		if (@groups>0) {
+			Signalbot_refreshGroups($hash);
+		}
 		return;
 	}
 
-	my @groups=@$groupID;
 	my $grp="";
 	foreach (@groups) {
 		$grp.=$_." " if defined $_;
@@ -548,8 +552,8 @@ sub Signalbot_ReceiptReceived {
 	my $sender=Signalbot_getContactName($hash,$source);
 	#Delete temporary files from last message(s)
 	my $attstore = $hash->{helper}{attachments};
-	my @atts = @$attstore;
-	if (@atts>0) {
+	if (defined $attstore) {
+		my @atts = @$attstore;
 		foreach my $file (@atts) {
 			if ($file =~ /tmp\/signalbot/) {
 				unlink $file;

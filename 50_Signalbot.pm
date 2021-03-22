@@ -1,5 +1,5 @@
 ##############################################
-# $Id:2.0 beta$
+my $Signalbot_VERSION='$Id:2.1$';
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -40,8 +40,12 @@ my %sets = (
  my %gets = (
   "contacts"      => "all,nonblocked",
   "groups"        => "all,active,nonblocked",
+#  "link"		  => "textField",
+#  "introspective" => "noArg"
 );
 
+
+#maybe really get introspective here instead of handwritten list
  my %signatures = (
 	"setContactBlocked" 	=> "sb",
 	"setGroupBlocked" 		=> "ayb",
@@ -64,6 +68,7 @@ my %sets = (
 	"isGroupBlocked" 		=> "ay",
 	"version" 				=> "",
 	"isMember"				=> "ay",
+	"link"					=> "s",
 	"isRegistered" 			=> ""
 );
 
@@ -71,7 +76,6 @@ sub Signalbot_Initialize($) {
   my ($hash) = @_;
 
   $hash->{DefFn}     = 	"Signalbot_Define";
-  $hash->{InitFn}  	 =  'Signalbot_Init';
   $hash->{AttrFn}    = 	"Signalbot_Attr";
   $hash->{SetFn}     = 	"Signalbot_Set";
   $hash->{ReadFn}    = 	"Signalbot_Read";
@@ -219,7 +223,7 @@ sub Signalbot_Set($@) {					#
 			Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Error from decode" if $@;
 			
 		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:";
-		my $tmpmessage = $fullstring =~ s/\\n/\x0a/r;
+		my $tmpmessage = $fullstring =~ s/\\n/\x0a/rg;
 		my @args=parse_line(' ',0,$tmpmessage);
 		
 		while(my $curr_arg = shift @args){
@@ -336,19 +340,31 @@ sub Signalbot_Get($@) {
 	
 	my $version = $hash->{helper}{version};
 	my $arg = shift @args;
+	
+	if ($cmd eq "link") {
+		my $qrcode=Signalbot_CallS($hash,"link",$arg);
+		return $qrcode if defined $qrcode;
+		return "Error linking device to number $arg";
+	} elsif ($cmd eq "introspective") {
+		my $reply=Signalbot_CallS($hash,"org.freedesktop.DBus.Introspectable.Introspect");
+		return undef;
+	}
 	if ($gets{$cmd} =~ /$arg/) {
 		if ($cmd eq "contacts") {
 			if ($version<=800) {
 				return "Signal-cli 0.8.1+ required for this functionality";
 			}
-			Signalbot_CallS($hash,"listNumbers");
+			my $num=Signalbot_CallS($hash,"listNumbers");
+			return "Error in listNumbers" if !defined $num;
+			my @numlist=@$num;
 			my $ret="List of known contacts:\n\n";
 			my $format="%-16s|%-30s|%-6s\n";
 			$ret.=sprintf($format,"Number","Name","Blocked");
 			$ret.="\n";
-			foreach my $number (keys %{$hash->{helper}{contacts}}) {
+			foreach my $number (@numlist) {
 				my $blocked=Signalbot_CallS($hash,"isContactBlocked",$number);
 				my $name=$hash->{helper}{contacts}{$number};
+				$name="UNKNOWN" unless defined $name;
 				if (! ($number =~ /^\+/) ) { $number="Unknown"; }
 				if ($arg eq "all" || $blocked==0) {
 					$ret.=sprintf($format,$number,$name,$blocked==1?"yes":"no");
@@ -360,8 +376,10 @@ sub Signalbot_Get($@) {
 			if ($version<=800) {
 				return "Signal-cli 0.8.1+ required for this functionality";
 			}
+			
 			my $ret="List of known groups:\n\n";
-			my $format="%-16s|%-6s|%-7s|%-30s\n";
+			my $memsize=40;
+			my $format="%-20.20s|%-6.6s|%-7.7s|%-".$memsize.".".$memsize."s\n";
 			$ret.=sprintf($format,"Group","Active","Blocked","Members");
 			$ret.="\n";
 			foreach my $groupid (keys %{$hash->{helper}{groups}}) {
@@ -370,12 +388,19 @@ sub Signalbot_Get($@) {
 				my $group=$hash->{helper}{groups}{$groupid}{name};
 				my @groupID=split(" ",$groupid);
 				my $mem=Signalbot_CallS($hash,"getGroupMembers",\@groupID);
+				return "Error reading group memebers" if !defined $mem;
 				my @members=();;
 				foreach (@$mem) {
 					push @members,Signalbot_getContactName($hash,$_);
 				}
 				if ($arg eq "all" || ($active==1 && $arg eq "active") || ($active==1 && $blocked==0 && $arg eq "nonblocked") ) {
-					$ret.=sprintf($format,$group,$active==1?"yes":"no",$blocked==1?"yes":"no",join(",",@members));
+					my $mem=join(",",@members);
+					$ret.=sprintf($format,$group,$active==1?"yes":"no",$blocked==1?"yes":"no",substr($mem,0,$memsize));
+					my $cnt=1;
+					while (length($mem)>$cnt*$memsize) {
+						$ret.=sprintf($format,"","","",substr($mem,$cnt*$memsize,$cnt*$memsize+$memsize));
+						$cnt++;
+					}
 				}
 			}
 			return $ret;
@@ -593,7 +618,6 @@ sub Signalbot_disconnect($@) {
 	eval { 
 		delete $hash->{helper}{dbus} if defined $hash->{helper}{dbus};
 		delete $hash->{helper}{dbuss} if defined $hash->{helper}{dbuss};
-		close $hash->{FD} if defined $hash->{FD};
 		delete $hash->{FD};
 		$selectlist{"$name.dbus"} = undef;
 		$hash->{STATE}="Disconnected";
@@ -611,7 +635,9 @@ sub Signalbot_setup($@){
 	if (defined $hash->{helper}{dbus}) {
 		#Reinitialize everything to avoid double callbacks and other issues
 		Signalbot_disconnect($hash);
-	}	
+	}
+	#Clear error on init to avoid confusion with old erros
+	readingsSingleUpdate($hash, 'lastError', "ok",0);
 	delete $hash->{helper}{contacts};
 	my $dbus = Protocol::DBus::Client::system();
 	if (!defined $dbus) {
@@ -644,6 +670,7 @@ sub Signalbot_setup2($@) {
 	my ($hash) = @_;
 	my $name=$hash->{NAME};
 	my $dbus=$hash->{helper}{dbus};
+	my $signalpath=$hash->{helper}{signalpath};
 	if (!defined $dbus) {
 		return "Error: Dbus not initialized";
 	}
@@ -656,7 +683,7 @@ sub Signalbot_setup2($@) {
             member      => 'AddMatch',
             destination => 'org.freedesktop.DBus',
             signature   => 's',
-            body        => [ "type='signal',path='/org/asamk/Signal'" 
+            body        => [ "type='signal',path='$signalpath'" 
 			],
         );	
 
@@ -678,16 +705,12 @@ sub Signalbot_setup2($@) {
 #Async Callback for getting Version
 sub Signalbot_Version_cb($@) {
 	my ($hash,$version) = @_;
-	if ($version eq "0.8.0") {$version="0.8.1";} #for beta release
 	my @ver=split('\.',$version);
 	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
 	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
-	if ($hash->{helper}{version}>800) {
-		readingsSingleUpdate($hash, 'signalVersion', $version,0);
-	}  else {
-		#No version info for 0.8.0 and older
-		readingsSingleUpdate($hash, 'signalVersion', "0.8.0 or older",0);
-	}
+	$Signalbot_VERSION =~ /^\$Id:(.*)\$$/;
+	my $sv= $1;
+	$hash->{VERSION}="Signalbot:".$sv." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
 	if($hash->{helper}{version}>800) {
 		Signalbot_Call($hash,"listNumbers");
 	}
@@ -725,7 +748,7 @@ sub Signalbot_CallS($@) {
 		$body=\@args;
 	}
 	$dbus->send_call(
-		path => '/org/asamk/Signal',
+		path => $hash->{helper}{signalpath},
 		interface => 'org.asamk.Signal',
 		signature => $sig,
 		body => $body,
@@ -789,7 +812,7 @@ sub Signalbot_Call($@) {
 		$body=\@args;
 	}
 	$dbus->send_call(
-		path => '/org/asamk/Signal',
+		path => $hash->{helper}{signalpath},
 		interface => 'org.asamk.Signal',
 		signature => $sig,
 		body => $body,
@@ -1055,6 +1078,7 @@ sub Signalbot_getNumber($@) {
 sub Signalbot_refreshGroups($@) {
 	my ( $hash ) = @_;
 	my $ret= Signalbot_CallS($hash,"getGroupIds");
+	return undef if !defined $ret;
 	my @groups = @$ret;
 	my @grouplist;
 	foreach (@groups) {
@@ -1144,7 +1168,7 @@ sub Signalbot_Attr(@) {					#
 	my ($command, $name, $attr, $val) = @_;
 	my $hash = $defs{$name};
 	my $msg = undef;
-
+	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Attr $attr=$val"; 
 	if($attr eq "allowedPeer") {
 	#Take over as is
 	return undef;
@@ -1201,6 +1225,20 @@ sub Signalbot_Attr(@) {					#
 	return $msg;	
 }
 
+sub Signalbot_setPath($$) {
+	my ($hash,$val) = @_;
+	if (defined $val) {
+		$hash->{helper}{signalpath}='/org/asamk/Signal/'.($val=~s/\+/\_/r);
+		Log3 $hash->{NAME}, 5, $hash->{NAME}." Using number $val";
+	} else {
+		$hash->{helper}{signalpath}='/org/asamk/Signal';
+		Log3 $hash->{NAME}, 5, $hash->{NAME}." Setting number to default";	
+	}
+	my $ret = Signalbot_setup($hash);
+	$hash->{STATE} = $ret if defined $ret;
+	return $ret;
+}
+
 sub Signalbot_Notify($$) {
 	my ($own_hash, $dev_hash) = @_;
 	my $ownName = $own_hash->{NAME}; # own name / hash
@@ -1211,18 +1249,18 @@ sub Signalbot_Notify($$) {
 	my $events = deviceEvents($dev_hash,1);
 
 	if ($devName eq "global" and grep(m/^INITIALIZED|REREADCFG$/, @{$events})) {
-		Signalbot_Init($own_hash,"");
+		Signalbot_Init($own_hash,$ownName." ".$own_hash->{TYPE}." ".$own_hash->{DEF});
 	}
 }
 
 ################################### 
 sub Signalbot_Define($$) {			#
 	my ($hash, $def) = @_;
-	Log3 $hash->{NAME}, 5, $hash->{NAME}." Define: $def";
+	Log3 $hash->{NAME}, 1, $hash->{NAME}." Define: $def";
 	
 	$hash->{NOTIFYDEV} = "global";
 		if ($init_done) {
-			Log3 $hash->{NAME}, 5, "Define init_done: $def";
+			Log3 $hash->{NAME}, 1, "Define init_done: $def";
 			my $ret=Signalbot_Init( $hash, $def );
 			return $ret if $ret;
 	}
@@ -1243,13 +1281,13 @@ sub Signalbot_Init($$) {				#
 	@a = split("[ \t]+", $args) if defined $args;
 	shift @a;shift @a;
 	my $name = $hash->{NAME};
-	if (defined $args && @a>0)	{
+	if (defined $args && @a>1)	{
 		return "Define: Wrong syntax. Usage:\n" .
-		       "define <name> Signalbot";
+		       "define <name> Signalbot [phonenumber]";
 	}
 
 	Signalbot_Set($hash, $name, "setfromreading");
-	my $ret = Signalbot_setup($hash);
+	my $ret = Signalbot_setPath($hash,$a[0]);
 	$hash->{STATE} = $ret if defined $ret;
 	return $ret if defined $ret;
 	return;
@@ -1419,8 +1457,10 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 	<a name="Signalbot_Define"></a><br>
 	<b>Define</b>
 	<ul>
-		<code>define &lt;name&gt; Signalbot</code><br>
-		No arguments<br>
+		<code>define &lt;name&gt; Signalbot [phonenumber]</code><br>
+		Experimental: The optional argument <b>phonenumber</b> must only be used under the following circumstances:<br>
+		There are multiple accounts (numbers) defined under signal-cli AND the daemon was started without the -u argument.<br>
+		When you only have one number defined or use the -u, providing the number here will result in not being able to connect. When in doubt put no number!<br>
 		<br>
 	</ul>
 
@@ -1506,7 +1546,7 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<li><b>get groups all|active|nonblocked</b><br>
 			<a name="groups"></a>
 			Shows an overview of all known groups along with their active and blocked status as well as the list of group members.<br>
-			Using the "active" option, all non-active groups (those your quit) are hidden, with "nonblocked" additionally the blocked ones get hidden.<br>
+			Using the "active" option, all non-active groups (those you quit) are hidden, with "nonblocked" additionally the blocked ones get hidden.<br>
 		</li>
 		<br>
 	</ul>

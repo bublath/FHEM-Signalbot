@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:0.0$"
+SCRIPTVERSION="$Id:2.1$"
 # Author: Adimarantis
 # License: GPL
 #Install script for FHEM including signal-cli
@@ -20,8 +20,9 @@ APT="usbutils libimage-librsvg-perl perl libcpan-changes-perl"
 CPAN="local::lib"
 NPM=
 #for signal-cli
-APT="$APT wget haveged default-jre qrencode pkg-config gcc zip libdbus-1-dev libexpat1-dev libxml-parser-perl libtemplate-perl libxml-xpath-perl build-essential xml-twig-tools base-files"
-CPAN="$CPAN Net::DBus"
+APT="$APT wget haveged default-jre qrencode zip base-files  libdbus-1-dev zip build-essential"
+#APT="$APT wget haveged default-jre qrencode pkg-config gcc zip libexpat1-dev libxml-parser-perl libtemplate-perl libxml-xpath-perl build-essential xml-twig-tools base-files"
+CPAN="$CPAN Protocol::DBus"
 #for DBLOG
 APT="$APT default-mysql-client libdbd-mysql libdbd-mysql-perl"
 #for FRITZBOX
@@ -345,10 +346,10 @@ create_docker() {
 	#Get latest scripts anyway
 	echo -n "Downloading/Updating Signalbot..."
 	cd $BUILDDIR/fhem-$FHEMVERSION
-	wget -qN wget https://raw.githubusercontent.com/bublath/FHEM-Signalbot/main/signal_install.sh
+	#wget -qN wget https://raw.githubusercontent.com/bublath/FHEM-Signalbot/main/signal_install.sh
 	chmod a+rx signal_install.sh
 	cd FHEM
-	wget -qN wget https://raw.githubusercontent.com/bublath/FHEM-Signalbot/main/50_Signalbot.pm
+	#wget -qN wget https://raw.githubusercontent.com/bublath/FHEM-Signalbot/main/50_Signalbot.pm
 	echo "done"
 	echo -n "Adjusting permissions..."
 	chown -R $FHEMUSER: $BUILDDIR/fhem-$FHEMVERSION 

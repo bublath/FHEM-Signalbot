@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:2.0$"
+SCRIPTVERSION="$Id:2.1$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -226,7 +226,7 @@ install_by_file /usr/include/dbus-1.0/dbus/dbus.h libdbus-1-dev
 #install_by_file /usr/share/doc-base/libxml-parser-perl libxml-parser-perl
 #install_by_file /usr/share/doc/libtemplate-perl libtemplate-perl
 #install_by_file /usr/share/doc/libxml-xpath-perl libxml-xpath-perl
-#install_by_file /usr/share/build-essential/essential-packages-list build-essential
+install_by_file /usr/share/build-essential/essential-packages-list build-essential
 #install_by_file /usr/share/doc/libxml-twig-perl xml-twig-tools
 install_by_file /usr/share/doc/libimage-librsvg-perl libimage-librsvg-perl
 
@@ -239,7 +239,7 @@ use Protocol::DBus;
 print \$Protocol::DBus::VERSION."\n";
 EOF
 
-echo -n "Checking for Net::DBus..."
+echo -n "Checking for Protocol::DBus..."
 NETDBUS=`perl $TMPFILE`
 
 if [ "$NETDBUS" = "$DBVER" ]; then
@@ -601,19 +601,34 @@ cat <<EOF >$TMPFILE
 use strict;
 use warnings;
 
-use Net::DBus;
+use Protocol::DBus::Client;
 
-my @attachment =();
-my @recipients=("$RECIPIENT");
-my \$bus = Net::DBus->system(); 
+my \$dbus = Protocol::DBus::Client::system();
+\$dbus->initialize();
+\$dbus->get_message();
 
-my \$service = \$bus->get_service("org.asamk.Signal");
-my \$object = \$service->get_object("/org/asamk/Signal");
+my \$got_response;
+my @recipients=('$RECIPIENT');
+my @att=();
+\$dbus->send_call(
+	path => '/org/asamk/Signal',
+	interface => 'org.asamk.Signal',
+	signature => 'sasas',
+	body => [ 'Testmessage from DBUS-Perl', \@att, \@recipients,
+	],
+	destination => 'org.asamk.Signal',
+	member => 'sendMessage',
+)->then( sub {
+	print "Message received\n";
+} )->catch( sub {
+	print "Error getting message\n";
+} )->finally( sub {
+	\$got_response = 1;
+} );
 
-my \$retcode = \$object->sendMessage("Testmessage from DBUS-Perl",\\@attachment,\\@recipients);
-print "return timestamp:".\$retcode."\n";
+\$dbus->get_message() while !\$got_response;
 EOF
-echo "Sending a message via perl Net::DBus"
+echo "Sending a message via perl Protocol::DBus"
 perl $TMPFILE
 echo "If the recipient got all three messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
 }

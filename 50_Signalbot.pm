@@ -1,5 +1,5 @@
 ##############################################
-my $Signalbot_VERSION='$Id:2.1$';
+my $Signalbot_VERSION='$Id:2.2$';
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -51,7 +51,7 @@ my %sets = (
 	"setGroupBlocked" 		=> "ayb",
 	"updateGroup" 			=> "aysass",
 	"updateProfile" 		=> "ssssb",
-	"quitGroup" 			=> "s",
+	"quitGroup" 			=> "ay",
 	"joinGroup"				=> "s",
 	"sendEndSessionMessage" => "as",
 	"sendGroupMessage"		=> "sasay",
@@ -508,7 +508,7 @@ sub Signalbot_MessageReceived ($@) {
 	my $join=AttrVal($hash->{NAME},"autoJoin","no");
 	if ($join eq "yes") {
 		if ($message =~ /^https:\/\/signal.group\//) {
-			return Signalbot_join($message);
+			return Signalbot_join($hash,$message);
 		}
 	}
 	
@@ -530,7 +530,7 @@ sub Signalbot_MessageReceived ($@) {
 		readingsEndUpdate($hash, 0);
 
 		$message=Signalbot_command($hash,$source,$message);
-
+		$message=encode_utf8($message);
 		readingsBeginUpdate($hash);
 		readingsBulkUpdate($hash, "msgAttachment", trim($atr));
 		readingsBulkUpdate($hash, "msgTimestamp", strftime("%d-%m-%Y %H:%M:%S", localtime($timestamp/1000)));
@@ -562,7 +562,11 @@ sub Signalbot_MessageReceived ($@) {
 		if (defined $bDevice && defined $bPeer && defined $replyPeer) {
 			if ($bPeer =~ /^.*$senderRegex.*$/ || $bPeer =~ /^.*$sourceRegex.*$/ || ($groupIdRegex ne "" && $bPeer =~ /^.*$groupIdRegex.*$/)) {
 				Log3 $hash->{NAME}, 4, $hash->{NAME}.": Calling Babble for $message ($replyPeer)";
-				my $rep=Babble_DoIt($bDevice,$message,$replyPeer);
+				if ($defs{$bDevice} && $defs{$bDevice}->{TYPE} eq "Babble") {
+					my $rep=Babble_DoIt($bDevice,$message,$replyPeer);
+				} else {
+					Log3 $hash->{NAME}, 2, $hash->{NAME}.": Wrong Babble Device $bDevice";
+				}
 			}
 		}
 		Log3 $hash->{NAME}, 4, $hash->{NAME}.": Message from $sender : $message processed";
@@ -1156,7 +1160,7 @@ sub Signalbot_sendGroupMessage($@) {
 	return join(" ",@arr) unless @arr>1;
 
 	readingsBeginUpdate($hash);
-	readingsBulkUpdate($hash, "sentMsg", $mes);
+	readingsBulkUpdate($hash, "sentMsg", encode_utf8($mes));
 	readingsBulkUpdate($hash, 'sentMsgTimestamp', "pending");
 	readingsEndUpdate($hash, 0);
 

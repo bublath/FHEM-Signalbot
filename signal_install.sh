@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:2.1$"
+SCRIPTVERSION="$Id:2.2$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -9,7 +9,7 @@ fi
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.8.1"
+SIGNALVERSION="0.8.4"
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -17,7 +17,7 @@ SYSTEMD=/etc/systemd/system
 LOG=/tmp/signal_install.log
 TMPFILE=/tmp/signal$$.tmp
 VIEWER=eog
-DBVER=0.16
+DBVER=0.17
 OPERATION=$1
 
 if [ -n "$2" ]; then
@@ -246,7 +246,7 @@ if [ "$NETDBUS" = "$DBVER" ]; then
 	echo "V$NETDBUS found"
 else
 	export PERL_MM_USE_DEFAULT=1
-	echo -n "Installing latest NET::DBus..."
+	echo -n "Installing latest Protocol::DBus..."
 	cpan install Protocol::DBus >>$LOG 2>>$LOG
 	echo "done"
 fi

@@ -1,5 +1,5 @@
 ##############################################
-my $Signalbot_VERSION='$Id:2.2$';
+my $Signalbot_VERSION='$Id:3.0beta$';
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -9,6 +9,15 @@ my $Signalbot_VERSION='$Id:2.2$';
 # 5 = Internal data and function calls
 # 4 = User actions and results
 # 3 = Error messages
+
+#Todo:
+#- Errorhandling: Use look_like_number for all place (especially registration) that require numbers (or pattern matching on numbers?)
+#- Errorhandling: Write error during registration into a special field to show it on top with the Detail page
+#- Test full flow with verification
+#- Find out how to download reg file
+#- Fix printing of complex reg file line: PERL WARNING: Argument "192.168.1.108" isn't numeric in addition (+) at ./FHEM/50_Signalbot.pm line 213.
+#- Update inline documentation
+
 package main;
 
 use strict;
@@ -17,8 +26,10 @@ use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-#use Data::Dumper;
+use Data::Dumper;
 use Time::HiRes qw( usleep );
+use URI::Escape;
+use HttpUtils;
 
 eval "use Protocol::DBus;1";
 eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
@@ -26,6 +37,7 @@ eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
 my %sets = (
   "send" => "textField",
   "reinit" => "noArg",
+  "setAccount" => "textField",		#V0.8.6+
   "setContact" => "textField",
   "createGroup" => "textField",		#Call updategroups with empty group parameter, mandatory name and optional avatar picture
   "invite" => "textField",			#Call updategroups with mandatory group name and mandatory list of numbers to join
@@ -34,13 +46,17 @@ my %sets = (
   "updateGroup" => "textField",		#Call updategroups to rename a group and/or set avatar picture
   "quitGroup" => "textField",		#V0.8.1+
   "joinGroup" => "textField",		#V0.8.1+
-  "updateProfile" => "textField"	#V0.8.1+
+  "updateProfile" => "textField",	#V0.8.1+
+  "link" => "noArg",				#V0.8.6+
+  "register" => "textField",		#V0.8.6+
+  "captcha" => "textField",			#V0.8.6+
+  "verify" => "textField",			#V0.8.6+
  );
  
  my %gets = (
-  "contacts"      => "all,nonblocked",
-  "groups"        => "all,active,nonblocked",
-#  "link"		  => "textField",
+  "contacts"      => "all,nonblocked",			#V0.8.1+
+  "groups"        => "all,active,nonblocked",	#V0.8.1+
+  "accounts"      => "noArg",					#V0.8.6+
 #  "introspective" => "noArg"
 );
 
@@ -53,7 +69,6 @@ my %sets = (
 	"updateProfile" 		=> "ssssb",
 	"quitGroup" 			=> "ay",
 	"joinGroup"				=> "s",
-	"sendEndSessionMessage" => "as",
 	"sendGroupMessage"		=> "sasay",
 	"sendNoteToSelfMessage" => "sas",
 	"sendMessage" 			=> "sasas",
@@ -68,14 +83,32 @@ my %sets = (
 	"isGroupBlocked" 		=> "ay",
 	"version" 				=> "",
 	"isMember"				=> "ay",
+	"getAccount"			=> "",
+#	"isRegistered" 			=> "", Removing this will primarily use the register instance, so "true" means -U mode, "false" means multi
+	"sendEndSessionMessage" => "as",		#unused
+	"sendRemoteDeleteMessage" => "xas",		#unused
+	"sendGroupRemoteDeletemessage" => "xay",#unused
+	"sendMessageReaction" => "sbsxas",		#unused
+	"sendGroupMessageReaction" => "sbsxay",	#unused
+);
+
+#dbus interfaces that only exist in registration mode
+my %regsig = (
+	"listAccounts"			=> "",
+	"isRegistered"			=> "",
 	"link"					=> "s",
-	"isRegistered" 			=> ""
+	"registerWithCaptcha"	=> "sbs",	#not implemented yet
+	"verifyWithPin"			=> "sss",	#not implemented yet
+	"register"				=> "sb",	#not implemented yet
+	"verify"				=> "ss",	#not implemented yet
 );
 
 sub Signalbot_Initialize($) {
   my ($hash) = @_;
 
   $hash->{DefFn}     = 	"Signalbot_Define";
+  $hash->{FW_detailFn}  = "Signalbot_Detail";
+  $hash->{FW_deviceOverview} = 1;
   $hash->{AttrFn}    = 	"Signalbot_Attr";
   $hash->{SetFn}     = 	"Signalbot_Set";
   $hash->{ReadFn}    = 	"Signalbot_Read";
@@ -99,6 +132,7 @@ sub Signalbot_Initialize($) {
 												"authDev ".
 												"cmdKeyword ".
 												"autoJoin:yes,no ".
+												"registerMethod:SMS,Voice ".
 												"$readingFnAttributes";
 }
 ################################### Todo: Set or Attribute for Mode? Other sets needed?
@@ -111,6 +145,7 @@ sub Signalbot_Set($@) {					#
 	return "Signalbot_Set: No cmd specified for set" if ( $numberOfArgs < 1 );
 
 	my $cmd = shift @args;
+	my $account = ReadingsVal($name,"account","none");
 	my $version = $hash->{helper}{version};
 	if (!exists($sets{$cmd}))  {
 		my @cList;
@@ -126,13 +161,96 @@ sub Signalbot_Set($@) {					#
 		}
 		return "Signalbot_Set: Unknown argument $cmd, choose one of " . join(" ", @cList);
 	} # error unknown cmd handling
+	
+	# Works always
+	if ( $cmd eq "reinit") {
+		my $ret = Signalbot_setup($hash);
+		$hash->{STATE} = $ret if defined $ret;
+		$hash->{helper}{qr}=undef;
+		return undef;
+	}
 
 	#Pre-parse for " " embedded strings, except for "send" that does its own processing
 	if ( $cmd ne "send") {
 		@args=parse_line(' ',0,join(" ",@args));
 	}
-	
-	if ( $cmd eq "setContact") {
+	if ( $cmd eq "setAccount" ) {
+		#When registered, first switch back to default account
+		my $number = shift @args;
+		return "Invalid number" if !defined Signalbot_checkNumber($number);;
+		my $ret = Signalbot_setAccount($hash, $number);
+		if (!defined $ret) {
+			readingsSingleUpdate($hash, 'joinedGroups', "",1);
+			return undef;
+		}
+		#if some error occured, register the old account
+		$ret = Signalbot_setAccount($hash,$account);
+		return $ret;
+	} elsif ($cmd eq "link") {
+		my $qrcode=Signalbot_CallS($hash,"link","FHEM");
+		
+		if (defined $qrcode) {
+			my $qr_url = "https://chart.googleapis.com/chart?cht=qr&chs=200x200"."&chl=";
+			$qr_url .= uri_escape($qrcode);
+			$hash->{helper}{qr}=$qr_url;
+			$hash->{helper}{register}=undef;
+			$hash->{helper}{verification}=undef;
+			return undef;
+		}
+		return "Error creating device link";
+	} elsif ( $cmd eq "register") {
+		my $account= shift @args;
+		return "Number needs to start with '+' followed by digits" if !defined Signalbot_checkNumber($account);
+		my $ret=Signalbot_Registration($hash,$account);
+		if (!defined $ret) {
+			my $err=ReadingsVal($name,"lastError","");
+			$err="Captcha";
+			if ($err =~ /Captcha/) {
+				$hash->{helper}{register}=$account;
+				$hash->{helper}{verification}=undef;
+				$hash->{helper}{qr}=undef;
+				Signalbot_createRegfiles($hash);
+				return;
+			}
+		}
+		$hash->{helper}{verification}=$account;
+		$hash->{helper}{register}=undef;
+		return;
+	} elsif ( $cmd eq "captcha" ) {
+		my $captcha=shift @args;
+		print $captcha."\n";
+		if ($captcha =~ /signalcaptcha:\/\//) {
+			$hash->{helper}{captcha}=$captcha =~ s/signalcaptcha:\/\///rg;;
+			my $account=$hash->{helper}{register};
+			if (defined $account) {
+				#register already done before - try again right away
+				my $ret=Signalbot_Registration($hash,$account);
+				if (defined $ret) {
+					$hash->{helper}{verification}=$account;
+					$hash->{helper}{register}=undef;
+					return 'Return <a href=fhem?detail='.$hash->{NAME}.'>here</a> to continue with verification.';
+				}
+			}
+		}
+		return "Incorrect captcha - e.g. needs to start with signalcaptcha://";
+	} elsif ( $cmd eq "verify" ) {
+		my $code=shift @args;
+		print $code."\n";
+		my $account=$hash->{helper}{verification};
+		if (!defined $account) {
+			return "You first need to complete registration before you can enter the verification code";
+		}
+		my $ret=Signalbot_CallS($hash,"verify",$account,$code);
+		return if !defined $ret;
+		if ($ret == 0) {
+			#On successfuly verification switch to that account
+			$ret=Signalbot_setAccount($hash,$account);
+			return $ret if defined $ret;
+			$hash->{helper}{register}=undef;
+			$hash->{helper}{verification}=undef;
+		}
+		return $ret;
+	} elsif ( $cmd eq "setContact") {
 		if (@args<2 ) {
 			return "Usage: set ".$hash->{NAME}." setContact <number> <nickname>";
 		} else {
@@ -308,10 +426,7 @@ sub Signalbot_Set($@) {					#
 		}
 		push @atts,@attachments;
 		$hash->{helper}{attachments}=[@atts];
-	} elsif ( $cmd eq "reinit") {
-		my $ret = Signalbot_setup($hash);
-		$hash->{STATE} = $ret if defined $ret;
-	}
+	} 
 	return undef;
 }
 ################################### 
@@ -341,14 +456,27 @@ sub Signalbot_Get($@) {
 	my $version = $hash->{helper}{version};
 	my $arg = shift @args;
 	
-	if ($cmd eq "link") {
-		my $qrcode=Signalbot_CallS($hash,"link",$arg);
-		return $qrcode if defined $qrcode;
-		return "Error linking device to number $arg";
-	} elsif ($cmd eq "introspective") {
+	if ($cmd eq "introspective") {
 		my $reply=Signalbot_CallS($hash,"org.freedesktop.DBus.Introspectable.Introspect");
 		return undef;
+	} elsif ($cmd eq "accounts") {
+		if ($version<805) {
+			return "Signal-cli 0.8.5+ required for this functionality";
+		}
+#		if ($account ne "none") {
+#			return "listAccounts only available in unregistered mode";
+#		}
+		my $num=Signalbot_CallS($hash,"listAccounts");
+		return "Error in listAccounts" if !defined $num;
+		my @numlist=@$num;
+		my $ret="List of registered accounts:\n\n";
+		foreach my $number (@numlist) {
+			my $account = $number =~ s/\/org\/asamk\/Signal\/_/+/rg;
+			$ret.=$account."\n";
+		}
+		return $ret;
 	}
+	
 	if ($gets{$cmd} =~ /$arg/) {
 		if ($cmd eq "contacts") {
 			if ($version<=800) {
@@ -690,7 +818,6 @@ sub Signalbot_setup2($@) {
             body        => [ "type='signal',path='$signalpath'" 
 			],
         );	
-
 	$hash->{STATE}="Connected";
 	
 	#Restore contactlist into internal hash
@@ -702,13 +829,12 @@ sub Signalbot_setup2($@) {
 			$hash->{helper}{contacts}{$k}=$v;
 		}
 	}
-	Signalbot_Call($hash,"version");
-	return undef;
-}
-
-#Async Callback for getting Version
-sub Signalbot_Version_cb($@) {
-	my ($hash,$version) = @_;
+	my $version=Signalbot_CallS($hash,"version");
+	my $account=ReadingsVal($name,"account","none");
+	if (!defined $version) {
+		return "Error calling version";
+	}
+	
 	my @ver=split('\.',$version);
 	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
 	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
@@ -716,7 +842,58 @@ sub Signalbot_Version_cb($@) {
 	my $sv= $1;
 	$hash->{VERSION}="Signalbot:".$sv." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
 	if($hash->{helper}{version}>800) {
-		Signalbot_Call($hash,"listNumbers");
+		my $state=Signalbot_CallS($hash,"isRegistered");
+		if ($state) {
+			#if running daemon is running in -u mode set the signal path to default regardless of the registered number
+			$hash->{helper}{signalpath}='/org/asamk/Signal';
+			$account=Signalbot_CallS($hash,"getAccount");
+			#Remove all entries that are once available in registration or multi mode
+			delete($gets{accounts});
+			delete($sets{setAccount});
+			delete($sets{register});
+			delete($sets{captcha});
+			delete($sets{verify});
+			delete($sets{link});
+		} else {
+			#else get accounts and add all numbers to the pulldown
+			my $num=Signalbot_CallS($hash,"listAccounts");
+			return "Error in listAccounts" if !defined $num;
+			my @numlist=@$num;
+			my $ret="";
+			foreach my $number (@numlist) {
+				if ($ret ne "") {$ret.=",";}
+				$ret .= $number =~ s/\/org\/asamk\/Signal\/_/+/rg;
+			}
+			$sets{setAccount}=$ret eq ""?"none":$ret;
+			#Only one number existing - choose automatically)
+			if(@numlist == 1) {
+				Signalbot_setAccount($hash,$ret);
+			}
+		}
+		#-u Mode or already registered
+		if ($state || $account ne "none") {
+			Signalbot_Call($hash,"listNumbers");
+			readingsBeginUpdate($hash);
+			readingsBulkUpdate($hash, 'account', $account);
+			readingsBulkUpdate($hash, 'lastError', "ok");
+			$hash->{STATE} ="Connected";
+			readingsEndUpdate($hash, 1);
+			return undef;
+		} else {
+			readingsBeginUpdate($hash);
+			readingsBulkUpdate($hash, 'account', "none");
+			readingsBulkUpdate($hash, 'lastError', "No account registered - use setAccount to connect to an existing registration, link or register to get a new account");
+			$hash->{STATE} ="Registration mode";
+			readingsEndUpdate($hash, 1);
+			return undef;
+		}
+	} else {
+		#These require 0.8.1 or greater
+		delete ($gets{contacts});
+		delete ($gets{groups});
+		delete ($sets{updateProfile});
+		delete ($sets{quitGroup});
+		delete ($sets{joinGroup});
 	}
 }
 
@@ -746,13 +923,20 @@ sub Signalbot_CallS($@) {
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Sync Dbus Call: $function Args:".((@args==0)?"empty":join(",",@args));
 	my $sig="";
 	my $body="";
+	my $path=$hash->{helper}{signalpath};
 	my $got_response = 0;
 	if (@args>0) {
 		$sig=$signatures{$function};
 		$body=\@args;
 	}
+	#Call base service (registration mode)
+	if (exists $regsig{$function}) {
+		$sig=$regsig{$function};
+		$path='/org/asamk/Signal';
+	}
+	print $path."\nf:".$function."\nb:".Dumper($body)."\ns:".$sig."\n";
 	$dbus->send_call(
-		path => $hash->{helper}{signalpath},
+		path => $path,
 		interface => 'org.asamk.Signal',
 		signature => $sig,
 		body => $body,
@@ -782,8 +966,8 @@ sub Signalbot_CallS($@) {
 		my $msg=$dbus->get_message();
 		my $sig = $msg->get_header('SIGNATURE');
 		if (!defined $sig) {
-			#Empty signature is probably a reply from a function without return data -> nothing to do
-			next;
+			#Empty signature is probably a reply from a function without return data, return 0 to differ to error case
+			return 0;
 		}
 		my $b=$msg->get_body()->[0];
 		if ($got_response==-1) {
@@ -811,12 +995,18 @@ sub Signalbot_Call($@) {
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": ASync Dbus Call: $function Args:".((@args==0)?"empty":join(",",@args));
 	my $sig="";
 	my $body="";
+	my $path=$hash->{helper}{signalpath};
 	if (@args>0) {
 		$sig=$signatures{$function};
 		$body=\@args;
 	}
+	#Call base service (registration mode)
+	if (exists $regsig{$function}) {
+		$sig=$regsig{$function};
+		$path='/org/asamk/Signal';
+	}
 	$dbus->send_call(
-		path => $hash->{helper}{signalpath},
+		path => $path,
 		interface => 'org.asamk.Signal',
 		signature => $sig,
 		body => $body,
@@ -826,8 +1016,8 @@ sub Signalbot_Call($@) {
 		my $msg = shift;
 		my $sig = $msg->get_header('SIGNATURE');
 		if (!defined $sig) {
-			#Empty signature is probably a reply from a function without return data -> nothing to do
-			return;
+			#Empty signature is probably a reply from a function without return data, nothing to do
+			return undef;
 		}
 		my $b=$msg->get_body();
 		my 	@body=@$b;
@@ -1231,16 +1421,106 @@ sub Signalbot_Attr(@) {					#
 
 sub Signalbot_setPath($$) {
 	my ($hash,$val) = @_;
+	my $account=$val;
 	if (defined $val) {
-		$hash->{helper}{signalpath}='/org/asamk/Signal/'.($val=~s/\+/\_/r);
+		readingsSingleUpdate($hash, 'account', ($account=~s/^\_/\+/r),0);
+		$hash->{helper}{signalpath}='/org/asamk/Signal/'.($val=~s/^\+/\_/r);
 		Log3 $hash->{NAME}, 5, $hash->{NAME}." Using number $val";
 	} else {
 		$hash->{helper}{signalpath}='/org/asamk/Signal';
-		Log3 $hash->{NAME}, 5, $hash->{NAME}." Setting number to default";	
+		Log3 $hash->{NAME}, 5, $hash->{NAME}." Setting number to default";
+		readingsSingleUpdate($hash, 'account', "none" ,0 );
 	}
 	my $ret = Signalbot_setup($hash);
 	$hash->{STATE} = $ret if defined $ret;
 	return $ret;
+}
+
+sub Signalbot_checkNumber($) {
+	my ($number) = @_;
+	return undef if !defined $number;
+	#Phone numbers need to start with + followed by a number (except 0) and an arbitrary list of digits (at least 5)
+	if ($number =~ /^\+[1-9][0-9]{5,}$/) {
+		#return with + replace to _ (which can be used or simply means "true")
+		return $number =~ s/^\+/\_/r;
+	}
+	#return undef if the number is incorrect
+	return undef;
+}
+
+sub Signalbot_setAccount($$) {
+	my ($hash,$account) = @_;
+	$account = Signalbot_checkNumber($account);
+	return "Account needs to start with '+' followed by digits" if !defined $account;
+	my $num=Signalbot_CallS($hash,"listAccounts");
+	return "Error in listAccounts" if !defined $num;
+	my @numlist=@$num;
+	foreach my $number (@numlist) {
+		if ($number =~ /$account/) {
+			Signalbot_setPath($hash,$account);
+			return undef;
+		}
+	}
+	return "Unknown account $account, please register or use listAccounts to view existing accounts";
+}
+
+
+sub Signalbot_Registration($$) {
+	my ($hash,$account) = @_;
+	my $name=$hash->{NAME};
+	my $method=AttrVal($name,"registerMethod","SMS");
+	$method=$method eq "SMS"?0:1;
+	my $captcha=$hash->{helper}{captcha};
+	my $ret;
+	if (!defined $captcha) {
+		#try without captcha (but never works nowadays)
+		$ret=Signalbot_CallS($hash,"register",$account,$method);
+	} else {
+		$ret=Signalbot_CallS($hash,"registerWithCaptcha",$account,$method,$captcha);
+	}
+	return $ret;
+}
+
+sub Signalbot_createRegfiles($) {
+	my ($hash) = @_;
+	#Generate .reg file for easy Captcha retrieval
+	my $ip=qx(hostname -I);
+	my @ipp=split(" ",$ip);
+	$ip=$ipp[0];
+	my $fh;
+	#1. For Windows
+	my $tmpfilename="www/signal/signalcaptcha.reg";
+	my $msg="Windows Registry Editor Version 5.00\n";
+	$msg .= '[HKEY_CLASSES_ROOT\signalcaptcha]'."\n";
+	$msg .= '@="URL:signalcaptcha"'."\n";
+	$msg .= '"URL Protocol"=""'."\n";
+	$msg .= '[HKEY_CLASSES_ROOT\signalcaptcha\shell]'."\n";
+	$msg .= '[HKEY_CLASSES_ROOT\signalcaptcha\shell\open]'."\n";
+	$msg .= '[HKEY_CLASSES_ROOT\signalcaptcha\shell\open\command]'."\n";
+	$msg .= '@="powershell.exe Start-Process -FilePath ( $(\'http://';
+	$msg .= $ip;
+	$msg .= ':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20\'+($(\'%1\') -replace \'^(.*)/$\',\'$1\') ) )"'."\n";
+	if(!open($fh, ">", $tmpfilename,)) {
+		Log3 $hash->{NAME}, 3, $hash->{NAME}.": Can't write $tmpfilename";
+	} else {
+		print $fh $msg;
+		close($fh);
+	}
+	#2. For Linux/X11
+	$tmpfilename="www/signal/signalcaptcha.desktop";
+	$msg  = "[Desktop Entry]\n";
+	$msg .= "Name=Signalcaptcha\n";
+	$msg .= 'Exec=xdg-open http://'.$ip.':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20%u'."\n";
+	$msg .= "Type=Application\n";
+	$msg .= "Terminal=false\n";
+	$msg .= "StartupNotify=false\n";
+	$msg .= "MimeType=x-scheme-handler/signalcaptcha\n";
+	if(!open($fh, ">", $tmpfilename,)) {
+		Log3 $hash->{NAME}, 3, $hash->{NAME}.": Can't write $tmpfilename";
+	} else {
+		print $fh $msg;
+		close($fh);
+	}
 }
 
 sub Signalbot_Notify($$) {
@@ -1251,9 +1531,10 @@ sub Signalbot_Notify($$) {
 
 	my $devName = $dev_hash->{NAME}; # Device that created the events
 	my $events = deviceEvents($dev_hash,1);
-
 	if ($devName eq "global" and grep(m/^INITIALIZED|REREADCFG$/, @{$events})) {
-		Signalbot_Init($own_hash,$ownName." ".$own_hash->{TYPE}." ".$own_hash->{DEF});
+		my $def=$own_hash->{DEF};
+		$def="" if (!defined $def); 
+		Signalbot_Init($own_hash,$ownName." ".$own_hash->{TYPE}." ".$def);
 	}
 }
 
@@ -1291,10 +1572,106 @@ sub Signalbot_Init($$) {				#
 	}
 
 	Signalbot_Set($hash, $name, "setfromreading");
-	my $ret = Signalbot_setPath($hash,$a[0]);
+	my $account=ReadingsVal($name,"account","none");
+	if ($account eq "none") {$account=$a[0]};
+	my $ret = Signalbot_setPath($hash,$account);
 	$hash->{STATE} = $ret if defined $ret;
 	return $ret if defined $ret;
 	return;
+}
+
+sub Signalbot_Detail {
+	my ($FW_wname, $name, $room, $pageHash) = @_;
+	my $hash=$defs{$name};
+	my $ret = "";
+	if ($^O ne "linux") {
+		return "SignalBot will only work on Linux - you run ".$^O."<br>This is because it requires some 3rd party tools only available on Linux.<br>Sorry.<br>";
+	}
+#	$ret .= "Detected:".$FW_userAgent."<br><br>";
+
+#Chrome/Win: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36
+#Chrome/Android: Mozilla/5.0 (Linux; Android 10; SM-G965F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.166 Mobile Safari/537.36
+#Edge/Win: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36 Edg/92.0.902.84
+#IE/Win: Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; Touch; rv:11.0) like Gecko
+#Ubuntu/Firefox: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:86.0) Gecko/20100101 Firefox/86.0
+	
+	if (defined $DBus_missing) {
+		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
+	}
+	if($hash->{helper}{version}<805) {
+		$ret .= "<b>signal-cli v0.8.6+ required.</b><br>Please use installer to update<br>";
+		$ret .= "You can download the installer at <a href=http://test.de>test.de<\/a><br>"; #TODO: updated installer, put into www/signal/
+		$ret .= "Then run it with<br><b>sudo ./signal_install.sh</b><br><br>";
+		$ret .= "Note: The installer only supports Debian based Linux distributions like Ubuntu and Raspberry OS<br>";
+		$ret .= "      and X86 or armv7l CPUs<br>";
+	return $ret;
+	}
+	my $current=ReadingsVal($name,"account","none");
+	my $account=$hash->{helper}{register};
+	my $verification=$hash->{helper}{verification};
+
+	#Not registered and no registration in progress
+	if ($current eq "none" && !defined $account && !defined $verification) {
+		$ret .= "To get started you need to <b>register a phone number</b> to FHEM.<br><br>";
+		$ret .= "It is recommended that you use an landline number using <b>set register</b> (remember to set the attribute <b>registerMethod</b> to 'Voice' if you need to receive a voice call instead of SMS)<br><br>";
+		$ret .= "Using a landline number typically will not interfere with using it for normal phone calls in parallel.<br>";
+		$ret .= "<b>Warning:</b> Registering will remove any prior registration (e.g. unregister your Smartphone using Signal Messsenger)!<br><br>";
+		$ret .= "You can however also <b>link</b> your Smartphone to FHEM (like a Desktop client) by using <b>set link</b> and scanning the QR Code.<br><br>";
+		$ret .=" Be aware that using FHEM in linked mode might cause unexpected behaviour since FHEM will receive all your messages!<br>";
+	}
+
+	if(defined $account) {
+		$ret .= "<b>You registration for $account requires a Captcha to succeed.</b><br><br>";
+		if ($FW_userAgent =~ /Mobile/) {
+			$ret .= "You seem to access FHEM from a mobile device. If the Signal Messenger is installed on this device, the Captcha will be catched by Signal and you will not be able to properly register FHEM. Recommendation is to do this from Windows where this can mostly be automated<br><br>";
+		}
+		if ($FW_userAgent =~ /\(Windows/) {
+			$ret .= "You seem to access FHEM from Windows. Please consider to download <a href=fhem/signal/signalcaptcha.reg download>this registry hack<\/a> and execute it. This helps to mostly automate the registration process<br><br>";
+		}
+		if ($FW_userAgent =~ /\((X11|Wayland)/) {
+			$ret .= "You seem to access FHEM from a Linux Desktop. Please consider to download <a href=fhem/signal/signalcaptcha.desktop download>this mine scheme<\/a> and install under ~/.local/share/applications/signalcaptcha.desktop<br>";
+			$ret .= "To activate it execute <b>xdg-mime default signalcaptcha.desktop x-scheme-handler/signalcaptcha</b> from your shell. This helps to mostly automate the registration process, however seems only to work with Firefox (not with Chromium)<br><br>";
+		}
+		$ret .= "Visit <a href=https://signalcaptchas.org/registration/generate.html>Signal Messenger Captcha Page<\/a> and complete the potential Captcha (often you will see an empty page which means you already passed just by visiting the page).<br><br>";
+		if ($FW_userAgent =~ /\(Windows/) {
+		$ret .= "If you applied the Windows registry hack, confirm opening Windows PowerShell and the rest will run automatically.<br><br>"
+		}
+		$ret .="If you're not using an automation option, you will then have to copy&paste the Captcha string that looks something like:<br><br>";
+		$ret .="<i>signalcaptcha://03AGdBq24NskB_KwAsS9kSY0PzRp4vKx01PZ8nGsfaTV2x548zaUy3aMqedsj..........</i><br><br>";
+		$ret .="To do this you typically need to open the Developer Tools (F12) and reload the Captcha.<br><br>";
+		if ($FW_userAgent =~ /Chrome/ ) {
+		$ret .="You seem to use a Chrome compatible browser. Now find the 'Network' tab, then the line with the Status=(canceled)<br>";
+		$ret .="If you move over the Name column you will see that it actually starts with signalcaptcha://<br>";
+		$ret .="Right click and chose Copy->Link Adress<br>";
+		$ret .="Return here and use <b>set captcha</b> to paste it and continue registration.<br><br>";
+		$ret .='<img src="fhem/signal/chrome-x11-snapshot.png">';
+		}
+		if ($FW_userAgent =~ /Firefox/ ) {
+		$ret .="You seem to use Firefox. Here find the 'Console' tab. You should see a 'prevented navigation' entry.<br>";
+		$ret .="Copy&Paste the signalcaptcha:// string (between quotes).<br>";
+		$ret .="Return here and use <b>set captcha</b> to paste it and continue registration.<br><br>";
+		$ret .='<img src="fhem/signal/firefox-x11-snapshot.png">';
+		}
+	}
+
+	if (defined $verification) {
+		$ret .= "<b>Your registration for $verification requires a verification code to complete.</b><br><br>";
+		$ret .= "You should have received a SMS or Voice call providing you the verification code.<br>";
+		$ret .= "use <b>set verify</b> with that code to complete the process.<br>";
+	}
+
+	my $qr_url = $hash->{helper}{qr};
+	if (defined $qr_url) {
+		$ret .= "<table>";
+		$ret .= "<tr><td rowspan=2>";
+		$ret .= "<a href=\"$qr_url\"><img src=\"$qr_url\"><\/a>";
+		$ret .= "</td>";
+		$ret .= "<td><br>&nbsp;Scan this QR code to link FHEM to your existing Signal device<\/td>";
+		$ret .= "</tr>";
+		$ret .= "</table>";
+	}
+	return if ($ret eq ""); #Avoid strange empty line if nothing is printed
+	return $ret;
 }
 
 ################################### 
@@ -1533,6 +1910,15 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<a name="updateProfile"></a>
 		Set the name of the FHEM Signal user as well as an optional avatar picture.<br>
 		</li>
+		<li><b>set logout</b><br>
+		<a name="logout"></a>
+		Logout from the current account. This will switch SignalBot into registration mode that can be used to register or link new accounts (phone numbers) or to connect to a different already registered account on this computer.<br>
+		</li>
+		<li><b>set setAccount &ltnumber&gt</b><br>
+		<a name="setAccount"></a>
+		Attach SignalBot to an existing, already registered account (phone number) on this computer. You can use "get accounts" to view the available accounts (only works when not connected to an account = registration mode). If no accounts are available use register or link to create one.<br>
+		<br>Signalbot can only handle one account at a time and will log you out the current account when using this option. On error it will try to reconnect to the previous account.
+		</li>
 		<li><b>set reinit</b><br>
 		<a name="reinit"></a>
 		Re-Initialize the module. For testing purposes when module stops receiving or has other issues. Should not be necessary.<br>
@@ -1551,6 +1937,11 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<a name="groups"></a>
 			Shows an overview of all known groups along with their active and blocked status as well as the list of group members.<br>
 			Using the "active" option, all non-active groups (those you quit) are hidden, with "nonblocked" additionally the blocked ones get hidden.<br>
+		</li>
+		<li><b>get accounts</b><br>
+			<a name="accounts"></a>
+			Lists all accounts (phone numbers) registered on this computer. Only available when not attached to an account (account=none).
+			Use register or link to create new accounts.<br>
 		</li>
 		<br>
 	</ul>

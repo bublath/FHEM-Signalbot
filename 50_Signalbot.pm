@@ -11,12 +11,7 @@ my $Signalbot_VERSION='$Id:3.0beta$';
 # 3 = Error messages
 
 #Todo:
-#- Errorhandling: Use look_like_number for all place (especially registration) that require numbers (or pattern matching on numbers?)
-#- Errorhandling: Write error during registration into a special field to show it on top with the Detail page
-#- Test full flow with verification
-#- Find out how to download reg file
-#- Fix printing of complex reg file line: PERL WARNING: Argument "192.168.1.108" isn't numeric in addition (+) at ./FHEM/50_Signalbot.pm line 213.
-#- Update inline documentation
+#- referrer after successful captcha
 
 package main;
 
@@ -228,7 +223,7 @@ sub Signalbot_Set($@) {					#
 				if (defined $ret) {
 					$hash->{helper}{verification}=$account;
 					$hash->{helper}{register}=undef;
-					return 'Return <a href=fhem?detail='.$hash->{NAME}.'>here</a> to continue with verification.';
+					return 'Captcha accepted. Return to '.$hash->{NAME}.' to enter your verificaton code.';
 				}
 			}
 		}
@@ -1816,45 +1811,41 @@ sub SignalBot_IdentifyStream($$) {
 
 =begin html
 
-<a name="Signalbot"></a>
 <h3>Signalbot</h3>
+<a id="Signalbot"></a>
 For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki</a>
 <ul>
-	<a name="Signalbot"></a>
 		provides an interface to the Signal Messenger, via signal_cli running as dbus daemon<br>
 		The signal_cli package needs to be installed. See github for installation details on <a href="https://github.com/AsamK/signal-cli">signal-cli</a><br>
 		An install script is available in the <a href="https://forum.fhem.de/index.php/topic,118370.0.html">FHEM forum</a><br>
 		<br><br>
-		Supported functionality (mainly due to limitations of the signal-cli dbus interface:<br>
+		Supported functionality:<br>
 		<ul>
 		<li>Send messages to individuals and/or groups with or without attachments</li>
 		<li>Work with contacts and groups using real names instead of internal codes and numbers</li>
 		<li>Group and contact names can contain space - surround them with quotes to use them in set commands</li>
-		<b>Limitations:</b><br>
-		<li>The whole setup, registration and eving joining groups has to be done from signal-cli. The install shell script is however guiding through this process.</li>
-		<li>Joining groups only via invitation link (not via invite!)</li>
+		<li>Creaet, join and leave and administrate groups</li>
+		<li>Register and link multiple devices and switch between them</li>
 		<br>
 		</ul>
-	<a name="Signalbot_Define"></a><br>
+	<a id="Signalbot-define"></a><br>
 	<b>Define</b>
 	<ul>
 		<code>define &lt;name&gt; Signalbot [phonenumber]</code><br>
-		Experimental: The optional argument <b>phonenumber</b> must only be used under the following circumstances:<br>
-		There are multiple accounts (numbers) defined under signal-cli AND the daemon was started without the -u argument.<br>
-		When you only have one number defined or use the -u, providing the number here will result in not being able to connect. When in doubt put no number!<br>
+		The optional argument <b>phonenumber</b> will try to use an existing registration for this number if already present.<br>
+		Note: To use multiple accounts (numbers) the signal-cli daemon needs to be started without the -u argument.<br>
 		<br>
 	</ul>
 
-	<a name="Signalbot_Set"></a>
+	<a id="Signalbot-set"></a>
 	<b>Set</b>
 	<ul>
 		<li><b>set &lt;name&gt; &lt;send&gt; [@&lt;Recipient1&gt; ... @&lt;RecipientN&gt;] [#&lt;GroupId1&gt; ... #&lt;GroupIdN&gt;] [&&lt;Attachment1&gt; ... &&lt;AttachmentN&gt;] [&lt;Text&gt;]</b><br>
-			<a name="send"></a>
+			<a id="Signalbot-set-send"></a>
 			Send a message to a Signal recipient using @Name or @+49xxx as well as groups with #Group or #@Group along with an attachment with &<path to file> and a message.
 		</li>
 		<br>
-		<li>
-			<a name="send2"></a>
+		<a id="Signalbot-setignore"></a>
 			<li>Use round brackets to let FHEM execute the content (e.g <code>&({plotAsPng('SVG_Temperatures')}</code></li>
 			<li>If a recipient, group or attachment contains white spaces, the whole expression (including @ # or &) needs to be put in double quotes. Escape quotes within with \"</li>
 			<li>If the round brackets contain curly brackets to execute Perl commands, two semi-colons (;;) need to be used to seperate multiple commands and at the end. The return value will be used e.g. as recipient</li>
@@ -1863,125 +1854,144 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<li>Messages to multiple groups or mixed with individual recipients will be sent in multiple messages</li>
 			<li>Attachments need to be file names readable for the fhem user with absolute path or relative to fhem user home</li>
 			<li>Recipients can be either contact names or phone numbers (starting with +). Since signal-cli only understand phone numbers, 
-			Signalbot tries to translate known contact names from its cache and might fail to send the message if unable to decode the contact<br>
+			Signalbot tries to translate known contact names from its cache and might fail to send the message if unable to decode the contact</li><br>
 			<li>To send multi line messages, use "\\n" in the message text</li>
 			<br>
 			Example:<br>
 			<code>set Signalbot send "@({my $var=\"Joerg\";; return $var;;})" #FHEM "&( {plotAsPng('SVG_Temperatures')} )" Here come the current temperature plot</code><br>
 			</ul>
 			<br>
-		</li>
 		<li><b>set setContact &ltnumber&gt &ltname&gt</b><br>
-		<a name="setContact"></a>
+		<a id="Signalbot-set-setContact"></a>
 		Define a nickname for a phone number to be used with the send command and in readings<br>
 		</li>
+		<li><b>set block #&ltgroupname&gt|&ltcontact&gt</b><br>
+		<a id="Signalbot-set-block"></a>
+		Put a group or contact on the blocked list (at the server) so you won't receive messages anymore. While the attribute "allowedPeer" is handled on FHEM level and messages are still received (but ignored), FHEM will not receive messages anymore for blocked communication partners<br>
+		</li>
+		<li><b>set unblock #&ltgroupname&gt|&ltcontact&gt</b><br>
+		<a id="Signalbot-set-unblock"></a>
+		Reverses the effect of "block", re-enabling the communication.<br>
+		</li>
 		<li><b>set createGroup &ltgroupname&gt [&&ltgroup picture&gt]</b><br>
-		<a name="createGroup"></a>
+		<a id="Signalbot-set-createGroup"></a>
 		Define a new Signal group with the specified name.<br>
 		Note: Pictures >2MB are known to cause issues and are blocked.<br>
 		</li>
 		<li><b>set updateGroup &ltgroupname&gt #[&ltnew groupname&gt] [&&ltgroup picture&gt]</b><br>
-		<a name="updateGroup"></a>
+		<a id="Signalbot-set-updateGroup"></a>
 		Update the name and/or group picture for an existing group.<br>
 		Note: Pictures >2MB are known to cause issues and are blocked.<br>
 		</li>
 		<li><b>set invite &ltgroupname&gt &ltcontact&gt</b><br>
-		<a name="invite"></a>
+		<a id="Signalbot-set-invite"></a>
 		Invite new members to an existing group.<br>
 		</li>		
-		<li><b>set block #&ltgroupname&gt|&ltcontact&gt</b><br>
-		<a name="block"></a>
-		Put a group or contact on the blocked list (at the server) so you won't receive messages anymore. While the attribute "allowedPeer" is handled on FHEM level and messages are still received (but ignored), FHEM will not receive messages anymore for blocked communication partners<br>
-		</li>
-		<li><b>set unblock #&ltgroupname&gt|&ltcontact&gt</b><br>
-		<a name="unblock"></a>
-		Reverses the effect of "block", re-enabling the communication.<br>
-		</li>
-		<a name="joinGroup"></a>
+		<a id="Signalbot-set-joinGroup"></a>
 		<li><b>set joinGroup &ltgroup link&gt</b><br>
 		Join a group via an invitation group like (starting with https://signal.group/....). This link can be sent from the group properties with the "group link" function.<br>
 		Easiest way is to share via Signal and set the "autoJoin" attribute which be recognized by Signalbot to automatically join.<br>
 		</li>
 		<li><b>set quitGroup &ltgroup link&gt</b><br>
-		<a name="quitGroup"></a>
+		<a id="Signalbot-set-quitGroup"></a>
 		Quit from a joined group. This only sets the membership to inactive, but does not delete the group (see "get groups")"<br>
 		</li>
 		<li><b>set updateProfile &ltnew name&gt [&&ltavatar picture&gt]</b><br>
-		<a name="updateProfile"></a>
+		<a id="Signalbot-set-updateProfile"></a>
 		Set the name of the FHEM Signal user as well as an optional avatar picture.<br>
 		</li>
-		<li><b>set logout</b><br>
-		<a name="logout"></a>
-		Logout from the current account. This will switch SignalBot into registration mode that can be used to register or link new accounts (phone numbers) or to connect to a different already registered account on this computer.<br>
-		</li>
 		<li><b>set setAccount &ltnumber&gt</b><br>
-		<a name="setAccount"></a>
-		Attach SignalBot to an existing, already registered account (phone number) on this computer. You can use "get accounts" to view the available accounts (only works when not connected to an account = registration mode). If no accounts are available use register or link to create one.<br>
-		<br>Signalbot can only handle one account at a time and will log you out the current account when using this option. On error it will try to reconnect to the previous account.
+		<a id="Signalbot-set-setAccount"></a>
+		Switch to a different already existing and registered account. When signal-cli runs in multi mode, the available numbers will be pre-filled as dropdown or can be retrieved with "get account".<br>
+		</li>
+		<li><b>set register &ltnumber&gt</b><br>
+		<a id="Signalbot-set-register"></a>
+		Start the registration wizard which will guide you through the registration of a new account including Captcha and Verification Code - just follow the instructions on the screen.<br>
+		Remember to set the attribute registerMethod to "Voice" if you want to receive a voice call with the verification code instead of a SMS.<br>
+		</li>
+		<li><b>set captcha signalcaptcha://&ltcaptcha string&gt</b><br>
+		<a id="Signalbot-set-captcha"></a>
+		Typically registration requires you to solve a captcha to protect spam to phone numbers. The registration wizard will typically guide you through the process.<br>
+		If the captcha is accepted use "set verify" to enter the verification code and finish registration.<br>
+		</li>
+		<li><b>set verify &ltverifcation code&gt</b><br>
+		<a id="Signalbot-set-verify"></a>
+		Last step in the registration process. Use this command to provide the verifcation code you got via SMS or voice call.<br>
+		If this step is finished successfully, Signalbot is ready to be used.<br>
+		</li>
+		<li><b>set link</b><br>
+		<a id="Signalbot-set-link"></a>
+		Alternative to registration: Link your Signal Messenger used with your smartphone to FHEM. A qr-code will be displayed that you can scan with your phone under settings->linked devices.<br>
+		Note: This is not the preferred method, since FHEM will receive all the messages you get on your phone which can cause unexpected results.<br>
 		</li>
 		<li><b>set reinit</b><br>
-		<a name="reinit"></a>
-		Re-Initialize the module. For testing purposes when module stops receiving or has other issues. Should not be necessary.<br>
+		<a id="Signalbot-set-reinit"></a>
+		Re-Initialize the module. For testing purposes when module stops receiving, has other issues or has been updated. Should not be necessary.<br>
 		</li>
 		<br>
 	</ul>
 	
-	<a name="Signalbot_Get"></a>
+	<a id="Signalbot-get"></a>
 	<b>Get</b>
 	<ul>
 		<li><b>get contacts all|nonblocked</b><br>
-			<a name="contacts"></a>
+			<a id="Signalbot-get-contacts"></a>
 			Shows an overview of all known numbers and contacts along with their blocked status. If "nonblocked" is chosen the list will not containt blocked contacts.<br>
 		</li>
 		<li><b>get groups all|active|nonblocked</b><br>
-			<a name="groups"></a>
+			<a id="Signalbot-get-groups"></a>
 			Shows an overview of all known groups along with their active and blocked status as well as the list of group members.<br>
 			Using the "active" option, all non-active groups (those you quit) are hidden, with "nonblocked" additionally the blocked ones get hidden.<br>
 		</li>
 		<li><b>get accounts</b><br>
-			<a name="accounts"></a>
+			<a id="Signalbot-get-accounts"></a>
 			Lists all accounts (phone numbers) registered on this computer. Only available when not attached to an account (account=none).
 			Use register or link to create new accounts.<br>
 		</li>
 		<br>
 	</ul>
 
-	<a name="SignalbotAttr"></a>
+	<a id="Signalbot-attr"></a>
 	<b>Attributes</b>
 	<ul>
 		<br>
+		<li><b>registerMethod</b><br>
+		<a id="Signalbot-attr-registerMethod></a>
+			Choose if you want to receive your verification code by SMS or Voice call during the registration process.<br>
+			Default: SMS, valid values: SMS, Voice<br>
+		</li>
 		<li><b>authTimeout</b><br>
-		<a name="authTimeout"></a>
+		<a id="Signalbot-attr-authTimeout"></a>
 			The number of seconds after which a user authentificated for command access stays authentifcated.<br>
 			Default: -, valid values: decimal number<br>
 		</li>
 		<li><b>authDev</b><br>
-		<a name="authDev"></a>
+		<a id="Signalbot-attr-authDev"></a>
 			Name of GoogleAuth device. Will normally be automatically filled when setting an authTimeout if a GoogleAuth device is already existing.<br>
 		</li>
-		<li><b>autoJoin 0|1</b><br>
-		<a name="authJoin"></a>
-			If set to 1, Signalbot will automatically inspect incoming messages for group invite links and join that group.<br>
-			Default: 0, valid values: 0|1<br>
+		<li><b>autoJoin no|yes</b><br>
+		<a id="Signalbot-attr-autoJoin"></a>
+			If set to yes, Signalbot will automatically inspect incoming messages for group invite links and join that group.<br>
+			Default: no, valid values: no|yes<br>
 		</li>
 		<li><b>allowedPeer</b><br>
-		<a name="allowedPeer"></a>
+		<a id="Signalbot-attr-allowedPeer"></a>
 			Comma separated list of recipient(s) and/or groupId(s), allowed to
 			update the msg.* readings and trigger new events when receiving a new message.<br>
 			<b>If the attribute is not defined, everyone is able to trigger new events!!</b>
 		</li>
 		<li><b>babblePeer</b><br>
-		<a name="babblePeer"></a>
+		<a id="Signalbot-attr-babblePeer"></a>
 			Comma separated list of recipient(s) and/or groupId(s) that will trigger that messages are forwarded to a Babble module defined by "BabbleDev". This can be used to interpret real language interpretation of messages as a chatbot or to trigger FHEM events.<br>
 			<b>If the attribute is not defined, nothing is sent to Babble</b>
 		</li>
 		<li><b>babbleDev</b><br>
-		<a name="babbleDev"></a>
+		<a id="Signalbot-attr-babbleDev"></a>
 			Name of Babble Device to be used. This will typically be automatically filled when bubblePeer is set.<br>
 			<b>If the attribute is not defined, nothing is sent to Babble</b>
 		</li>
 		<li><b>commandKeyword</b><br>
-		<a name="commandKeyword"></a>
+		<a id="Signalbot-attr-commandKeyword"></a>
 			One or more characters that mark a message as GoogleAuth protected command which is directly forwarded to FHEM for processing. Example: for "="<br>
 			=123456 set lamp off<br>
 			where "123456" is a GoogleAuth token. The command after the token is optional. After the authentification the user stay for "authTimeout" seconds authentificated and can execute command without token (e.g. "=set lamp on").<br>
@@ -1990,15 +2000,17 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<br>
 	</ul>
 	<br>
-	<a name="SignalbotReadings"></a>
+	<a id="SignalbotReadings"></a>
 	<b>Readings</b>
 	<ul>
 		<br>
+		<li><b>account</b></li>
+		The currently active account (phone number) - "none" if current not registered to a number.<br>
 		<li><b>(prev)msgAttachment</b></li>
 		Attachment(s) of the last received (or for history reasons the previous before). The path points to the storage in signal-cli and can be used to retrieve the attachment.<br>
 		<li><b>(prev)msgGroupName</b></li>
 		Group of the last message (or for history reasons the previous before). Empty if last message was a private message<br>
-		<li>(prev)msgSender</b></li>
+		<li><b>(prev)msgSender</b></li>
 		Sender that sent the last message (or previous before) <br>
 		<li><b>(prev)msgText</b></li>
 		Content of the last message <br>

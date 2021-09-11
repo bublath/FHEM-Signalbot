@@ -10,9 +10,6 @@ my $Signalbot_VERSION='$Id:3.0beta$';
 # 4 = User actions and results
 # 3 = Error messages
 
-#Todo:
-#- referrer after successful captcha
-
 package main;
 
 use strict;
@@ -21,7 +18,7 @@ use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-use Data::Dumper;
+#use Data::Dumper;
 use Time::HiRes qw( usleep );
 use URI::Escape;
 use HttpUtils;
@@ -213,7 +210,6 @@ sub Signalbot_Set($@) {					#
 		return;
 	} elsif ( $cmd eq "captcha" ) {
 		my $captcha=shift @args;
-		print $captcha."\n";
 		if ($captcha =~ /signalcaptcha:\/\//) {
 			$hash->{helper}{captcha}=$captcha =~ s/signalcaptcha:\/\///rg;;
 			my $account=$hash->{helper}{register};
@@ -223,14 +219,17 @@ sub Signalbot_Set($@) {					#
 				if (defined $ret) {
 					$hash->{helper}{verification}=$account;
 					$hash->{helper}{register}=undef;
-					return 'Captcha accepted. Return to '.$hash->{NAME}.' to enter your verificaton code.';
+					#Switch back to device overview - experimental hint from rudolphkoenig https://forum.fhem.de/index.php/topic,122771.msg1173835.html#new
+					my $web=$hash->{CL}{SNAME};
+					my $peer=$hash->{CL}{PEER};
+					DoTrigger($web,"JS#$peer:location.href=".'"'."?detail=$name".'"');
+					return undef;
 				}
 			}
 		}
 		return "Incorrect captcha - e.g. needs to start with signalcaptcha://";
 	} elsif ( $cmd eq "verify" ) {
 		my $code=shift @args;
-		print $code."\n";
 		my $account=$hash->{helper}{verification};
 		if (!defined $account) {
 			return "You first need to complete registration before you can enter the verification code";
@@ -243,6 +242,11 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 			$hash->{helper}{register}=undef;
 			$hash->{helper}{verification}=undef;
+			#Switch back to device overview - experimental hint from rudolphkoenig https://forum.fhem.de/index.php/topic,122771.msg1173835.html#new
+			my $web=$hash->{CL}{SNAME};
+			my $peer=$hash->{CL}{PEER};
+			DoTrigger($web,"JS#$peer:location.href=".'"'."?detail=$name".'"');
+			return undef;
 		}
 		return $ret;
 	} elsif ( $cmd eq "setContact") {
@@ -929,7 +933,7 @@ sub Signalbot_CallS($@) {
 		$sig=$regsig{$function};
 		$path='/org/asamk/Signal';
 	}
-	print $path."\nf:".$function."\nb:".Dumper($body)."\ns:".$sig."\n";
+	#print $path."\nf:".$function."\nb:".Dumper($body)."\ns:".$sig."\n";
 	$dbus->send_call(
 		path => $path,
 		interface => 'org.asamk.Signal',
@@ -1582,14 +1586,7 @@ sub Signalbot_Detail {
 	if ($^O ne "linux") {
 		return "SignalBot will only work on Linux - you run ".$^O."<br>This is because it requires some 3rd party tools only available on Linux.<br>Sorry.<br>";
 	}
-#	$ret .= "Detected:".$FW_userAgent."<br><br>";
 
-#Chrome/Win: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36
-#Chrome/Android: Mozilla/5.0 (Linux; Android 10; SM-G965F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.166 Mobile Safari/537.36
-#Edge/Win: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36 Edg/92.0.902.84
-#IE/Win: Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; Touch; rv:11.0) like Gecko
-#Ubuntu/Firefox: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:86.0) Gecko/20100101 Firefox/86.0
-	
 	if (defined $DBus_missing) {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}

@@ -1,15 +1,12 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:2.2$"
+SCRIPTVERSION="$Id:3.0beta$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
-if [ -z "$PHONE" ]; then
-	PHONE="+49xxxx"
-fi
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.8.4"
+SIGNALVERSION="0.8.5"
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -17,12 +14,8 @@ SYSTEMD=/etc/systemd/system
 LOG=/tmp/signal_install.log
 TMPFILE=/tmp/signal$$.tmp
 VIEWER=eog
-DBVER=0.17
+DBVER=0.19
 OPERATION=$1
-
-if [ -n "$2" ]; then
-	PHONE=$2
-fi
 
 #Make sure picture viewer exists
 VIEWER=`which $VIEWER`
@@ -56,13 +49,12 @@ fi
 echo "This script will help you to install signal-cli as system dbus service"
 echo "and prepare the use of the FHEM Signalbot module"
 echo
-echo "Please verify that these settigns are correct:"
+echo "Please verify that these settings are correct:"
 echo "Signal-cli User:              $SIGNALUSER"
 echo "Signal-cli Install directory: $SIGNALPATH"
 echo "Signal config storage:        $SIGNALVAR"
 echo "Signal version:               $SIGNALVERSION"
 echo "System library path:          $LIBPATH"
-echo "Phone number to be used:      $PHONE"
 
 #
 install_and_check() {
@@ -208,9 +200,6 @@ install_and_check java default-jre
 install_and_check diff diffutils
 install_and_check dbus-send dbus
 install_and_check cpan cpanminus
-install_and_check qrencode qrencode
-#install_and_check pkg-config pkg-config
-#install_and_check gcc gcc
 install_and_check zip zip
 if [ -z "$BASH" ]; then
 	echo "This script requires bash for some functions. Check if bash is installed."
@@ -221,13 +210,7 @@ fi
 
 #For DBus check a number of Perl modules on file level
 install_by_file /usr/include/dbus-1.0/dbus/dbus.h libdbus-1-dev
-#install_by_file /usr/share/perl5/Test/CPAN/Changes.pm libcpan-changes-perl
-#install_by_file /usr/include/expat.h libexpat1-dev
-#install_by_file /usr/share/doc-base/libxml-parser-perl libxml-parser-perl
-#install_by_file /usr/share/doc/libtemplate-perl libtemplate-perl
-#install_by_file /usr/share/doc/libxml-xpath-perl libxml-xpath-perl
 install_by_file /usr/share/build-essential/essential-packages-list build-essential
-#install_by_file /usr/share/doc/libxml-twig-perl xml-twig-tools
 install_by_file /usr/share/doc/libimage-librsvg-perl libimage-librsvg-perl
 
 cat >$TMPFILE <<EOF
@@ -376,7 +359,7 @@ After=network-online.target
 [Service]
 Type=dbus
 Environment="SIGNAL_CLI_OPTS=-Xms2m"
-ExecStart=$SIGNALPATH/signal/bin/signal-cli --config $SIGNALVAR -u "$PHONE" daemon --system
+ExecStart=$SIGNALPATH/signal/bin/signal-cli --config $SIGNALVAR daemon --system
 User=$SIGNALUSER
 BusName=org.asamk.Signal
 	
@@ -394,7 +377,7 @@ EOF
 fi
 }
 
-#stop service depeding on Docker or not
+#stop service depending on Docker or not
 stop_service() {
   if [ -z "$DOCKER" ]; then
 	echo "Stopping signal-cli service"
@@ -451,151 +434,20 @@ start_service() {
 	fi
 }
 
-display_qr() {
- COUNT=0;
- while [ ! -e /tmp/qrcode.png ]
- do
-	sleep 1
-	((COUNT++))
-	if [ $COUNT -gt 60 ]; then
-		break
-	fi
-done
-if [ -e /tmp/qrcode.png ] && [ -n $VIEWER ]; then
-	$VIEWER /tmp/qrcode.png 2>/dev/null
-fi
-}
-
-link_device() {
-cd $SIGNALPATH/signal/bin
-echo "Linking to existing number"
-echo
-echo "Open PNG in /tmp/qrcode.png that will appear in a couple of seconds and scan with your primary device"
-echo "Process will continue after successfully scanning qrcode and accepting link"
-echo "If you take too long, it will timeout and needs to be repeated"
-stop_service
-rm -f /tmp/qrcode.png
-display_qr &
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR link -n `hostname` | xargs -L 1 qrencode -o /tmp/qrcode.png
-
-echo "Reading account data"
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR receive
-start_service
-echo "done"
-}
-
-register_device() {
-cd $SIGNALPATH/signal/bin
-
-echo "Registering for $PHONE"
-echo
-echo -n "Receive registration code for $PHONE by (S)MS or (V)oice (s/v)? "
-read REPLY
-OPTION="";
-if [ "$REPLY" = "s" ]; then
-	OPTION=""
-	echo "Registering $PHONE with SMS"
-elif [ "$REPLY" = "v" ]; then
-	OPTION="--voice"
-	echo "Registering $PHONE with Voice call"
-else 
-	echo "Unknown option $REPLY, exiting"
-	exit
-fi
-stop_service
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE register $OPTION 2>$TMPFILE
-CAPTCHA=`cat $TMPFILE | grep Captcha`
-if [ -n "$CAPTCHA" ]; then
-echo "*** Signal requires a CAPTCHA , use any browser to go to:" 
-echo "*** https://signalcaptchas.org/registration/generate.html"
-echo "*** Solve the captcha there (might also just be an empty page) then press F12"
-echo "*** On Chrome go to Network, press Ctrl+R, look into the 'name' column of the table"
-echo "*** On Firefox Go to console"
-echo "*** Now find the name starting with signalcaptcha://"
-echo "*** copy that string with out the signalcaptcha:// (right click -> copy link adress)"
-echo -n "Paste it here:"
-read REPLY
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE register $OPTION --captcha $REPLY
-fi
-
-echo "You should get a call or SMS now providing a 6 digit code"
-echo -n "Enter this code here:"
-read REPLY
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE verify $REPLY
-
-echo "checking and receiving"
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE receive
-start_service
-}
-
-join_group() {
-echo "Please enter the uri link (created share group link, looking like https://signal.group/......"
-echo -n "Group:"
-read REPLY
-RECIPIENT=$REPLY
-stop_service
-echo "If you get a 'in use, waiting' message, then stopping of system Signal service did not succeed. Press Ctrl-C and try again"
-cd $SIGNALPATH/signal/bin
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE join --uri $RECIPIENT
-start_service
-echo "If the recipient got the messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
-}
-
-name_user() {
-echo "Please chose a name for your Signal User with number $PHONE (You have to update the name if you want to set a picture!)"
-echo -n "Name:"
-read REPLY
-NAME=$REPLY
-echo "Please provide a filename to a picture to be used as avatar for your user (press return to keep unchanged)"
-echo -n "File:"
-read AVATAR
-if [ -n "$AVATAR" ]; then
-	if ! [[ "$AVATAR" =~ ^/ ]]; then
-		#relative path - add current directory
-		AVATAR=`pwd`/$AVATAR
-	fi
-	if ! [ -e "$AVATAR" ]; then
-		echo "File $AVATAR was not found"
-		return
-	fi
-fi
-	
-if [ -z "$NAME" ]; then
-	echo "Nothing to do (you need a name to change the picture)"
-	return;
-fi
-
-stop_service
-echo "If you get a 'in use, waiting' message, then stopping of system Signal service did not succeed. Press Ctrl-C and try again"
-cd $SIGNALPATH/signal/bin
-if [ -n "$AVATAR" ]; then
-	SETAVATAR="--avatar $AVATAR"
-fi
-if [ -n "$NAME" ]; then
-	sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE updateProfile --name "$NAME" $SETAVATAR
-fi
-#Make sure local config is updated
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE receive
-stop_service
-echo "Your profile has been updated"
-}
-
 test_device() {
-echo "Please enter the number (+49...) of somebody that you can send a test message to"
-echo -n "Number:"
-read REPLY
-RECIPIENT=$REPLY
-if [ -z "$REPLY" ]; then
-	return
-fi
-echo "Sending a message from command line to $RECIPIENT"
-stop_service
-echo "If you get a 'in use, waiting' message, skip by pressing CTRL-C - this is normal when system service is already up and running"
-cd $SIGNALPATH/signal/bin
-sudo -u $SIGNALUSER ./signal-cli --config $SIGNALVAR -u $PHONE send -m "Test message from the command line" "$RECIPIENT"
 start_service
-echo "Sending a message via dbus-send command"
-dbus-send --system --type=method_call --print-reply --dest="org.asamk.Signal" /org/asamk/Signal org.asamk.Signal.sendMessage string:"Test message via DBus" array:: string:$RECIPIENT
+echo -n "Checking installation via dbus-send command..."
+REPLY=`dbus-send --system --type=method_call --print-reply --dest="org.asamk.Signal" /org/asamk/Signal org.asamk.Signal.isRegistered`
+REP1=`echo $REPLY | grep "boolean false"`
+REP2=`echo $REPLY | grep "boolean true"`
+
+if [ -n "$REP1" ]; then
+   echo "success - signal-cli running in standard registration mode"
+fi
+if [ -n "$REP2"  ]; then
+   echo "partial success - still running in -u mode - check $SYSTEMD/signal.service"
+fi
+
 cat <<EOF >$TMPFILE
 #!/usr/bin/perl -w
 use strict;
@@ -613,24 +465,22 @@ my @att=();
 \$dbus->send_call(
 	path => '/org/asamk/Signal',
 	interface => 'org.asamk.Signal',
-	signature => 'sasas',
-	body => [ 'Testmessage from DBUS-Perl', \@att, \@recipients,
-	],
+	signature => '',
+	body => undef,
 	destination => 'org.asamk.Signal',
-	member => 'sendMessage',
+	member => 'isRegistered',
 )->then( sub {
-	print "Message received\n";
+	print "reply received\n";
 } )->catch( sub {
-	print "Error getting message\n";
+	print "Error getting reply\n";
 } )->finally( sub {
 	\$got_response = 1;
 } );
 
 \$dbus->get_message() while !\$got_response;
 EOF
-echo "Sending a message via perl Protocol::DBus"
+echo -n "Sending a message via perl Protocol::DBus..."
 perl $TMPFILE
-echo "If the recipient got all three messages, your setup looks healthy and you're ready to go to set up Signalbot in FHEM"
 }
 
 remove_all() {
@@ -671,27 +521,22 @@ else
 		kill $PID
 	fi
 fi
-
 }
 
-
-if [ -z $OPERATION ]; then
-	echo "This will update system packages, install signal-cli and help to register with Signal service"
+if [ -z "$OPERATION" ] ; then
+	echo "This will update system packages, install or uninstall signal-cli"
 	echo
-	echo "To do this rather step by step use the command line arguments or just proceed to do system,install,register:"
-	echo "system   : prepare required system package (except signal-cli) - make sure you ran this before you do anything else!"
+	echo "system   : prepare required system package (except signal-cli)"
 	echo "install  : install signal-cli and setup as dbus system service"
-	echo "register : register a NEW number with Signal"
-	echo "link     : link an EXISTING number with Signal (e.g. you Smartphone)"
 	echo "test     : run a basic test if everything is installed and registered correctly"
 	echo "remove   : Remove signal-cli and all configurations (will be archived)"
-	echo "join     : Join current number to an existing group (invite by group link)"
-	echo "name     : set or change Signal user name and/or avatar picture"
 	echo "start    : Start the signal-cli service (or respective docker processes)"
+	echo "all      : Run system, install, start and test (default)"
 	echo
 	echo "!!! Everything needs to run with sudo/root !!!"
+	OPERATION=all
 else
-	echo "Your chose the following option: $OPERATION"
+	echo "You chose the following option: $OPERATION"
 fi
 echo
 if [ -z "$OPERATION" ] || [ "$OPERATION" = "system" ] || [ "$OPERATION" = "install" ] || [ "$OPERATION" = "all" ]; then
@@ -712,40 +557,6 @@ if [ -z "$OPERATION" ] || [ $OPERATION = "all" ] || [ $OPERATION = "install" ]; 
 	install_signal_cli
 fi
 
-if [ -z "$OPERATION" ] || [ $OPERATION = "all" ]; then
-	cd $SIGNALPATH/signal/bin
-	if [ -d $SIGNALVAR/data ]; then
-		if [ -e $SIGNALVAR/data/$PHONE ]; then
-			echo "Your device $PHONE is already configured, do want to run through registration again?"
-		else
-			echo "You already seem to have a device configured, add $PHONE additionally?"
-		fi
-	else 
-		echo "No device configuration found, starting process for $PHONE"
-	fi
-	echo -n "Continue (y) or skip (N)?"
-	read REPLY	
-	if [ "$REPLY" = "y" ]; then
-		echo "You can either"
-		echo "(r) register a new device (if that device is already registered e.g. to a smartphone that will be removed)"
-		echo "(l) link to an already registered device (both device will get the messages)"
-		echo "It is recommended to register a new device e.g. a land-line for usage with FHEM"
-		echo -n "register or link (r/l)"
-		read REPLY
-		if [ "$REPLY" = "r" ]; then
-			register_device
-			echo "In order to use V2 groups with Signal, your registered user needs a name"
-			name_user
-		elif [ "$REPLY" = "l" ]; then
-			link_device
-		fi
-	fi
-fi
-
-if [ "$OPERATION" = "register" ]; then
-	register_device
-fi
-
 if [ -z "$OPERATION" ] || [ $OPERATION = "all" ] || [ $OPERATION = "test" ]; then
 	test_device
 	exit
@@ -756,20 +567,8 @@ if [ $OPERATION = "remove" ]; then
 	remove_all
 fi
 
-if [ $OPERATION = "link" ]; then
-	link_device
-fi
-
 if [ $OPERATION = "start" ]; then
 	start_service
-fi
-
-if [ $OPERATION = "name" ]; then
-	name_user
-fi
-
-if [ $OPERATION = "join" ]; then
-	join_group
 fi
 
 rm -f $TMPFILE

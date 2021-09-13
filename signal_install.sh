@@ -6,7 +6,7 @@ SCRIPTVERSION="$Id:3.0beta$"
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.8.5"
+SIGNALVERSION="0.9.0"
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -291,8 +291,8 @@ if [ $NEEDINSTALL = 1 ]; then
 			echo "Downloading native armv7l libraries..."
 			cd /tmp
 			rm -rf libsignal_jni.so libzkgroup.so
-			wget -qN https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signallibs_armv7l/libzkgroup.so
-			wget -qN https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signallibs_armv7l/libsignal_jni.so
+			wget -qN https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signallibs_armv7l/v$SIGNALVERSION/libzkgroup.so
+			wget -qN https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signallibs_armv7l/v$SIGNALVERSION/libsignal_jni.so
 			echo "done"
 			echo -n "Updating native x86 since you're on Raspberry..."
 			zip -u $SIGNALPATH/signal/lib/zkgroup-java-*.jar libzkgroup.so

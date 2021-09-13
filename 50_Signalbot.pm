@@ -10,6 +10,8 @@ my $Signalbot_VERSION='$Id:3.0beta$';
 # 4 = User actions and results
 # 3 = Error messages
 
+#Wenn kein Signal-cli gefunden wird, alle set/get blockieren? Sonst gibt es potentiell expections
+
 package main;
 
 use strict;
@@ -18,7 +20,7 @@ use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-#use Data::Dumper;
+use Data::Dumper;
 use Time::HiRes qw( usleep );
 use URI::Escape;
 use HttpUtils;
@@ -29,8 +31,8 @@ eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
 my %sets = (
   "send" => "textField",
   "reinit" => "noArg",
-  "setAccount" => "textField",		#V0.8.6+
-  "setContact" => "textField",
+  "account" => "textField",			#V0.9.0+
+  "contact" => "textField",
   "createGroup" => "textField",		#Call updategroups with empty group parameter, mandatory name and optional avatar picture
   "invite" => "textField",			#Call updategroups with mandatory group name and mandatory list of numbers to join
   "block" => "textField",			#Call setContactBlocked or setGroupBlocked (one one at a time)
@@ -39,16 +41,16 @@ my %sets = (
   "quitGroup" => "textField",		#V0.8.1+
   "joinGroup" => "textField",		#V0.8.1+
   "updateProfile" => "textField",	#V0.8.1+
-  "link" => "noArg",				#V0.8.6+
-  "register" => "textField",		#V0.8.6+
-  "captcha" => "textField",			#V0.8.6+
-  "verify" => "textField",			#V0.8.6+
+  "link" => "noArg",				#V0.9.0+
+  "register" => "textField",		#V0.9.0+
+  "captcha" => "textField",			#V0.9.0+
+  "verify" => "textField",			#V0.9.0+
  );
  
  my %gets = (
   "contacts"      => "all,nonblocked",			#V0.8.1+
   "groups"        => "all,active,nonblocked",	#V0.8.1+
-  "accounts"      => "noArg",					#V0.8.6+
+  "accounts"      => "noArg",					#V0.9.0+
 #  "introspective" => "noArg"
 );
 
@@ -93,6 +95,7 @@ my %regsig = (
 	"verifyWithPin"			=> "sss",	#not implemented yet
 	"register"				=> "sb",	#not implemented yet
 	"verify"				=> "ss",	#not implemented yet
+	"version" 				=> "",
 );
 
 sub Signalbot_Initialize($) {
@@ -166,13 +169,14 @@ sub Signalbot_Set($@) {					#
 	if ( $cmd ne "send") {
 		@args=parse_line(' ',0,join(" ",@args));
 	}
-	if ( $cmd eq "setAccount" ) {
+	if ( $cmd eq "account" ) {
 		#When registered, first switch back to default account
 		my $number = shift @args;
 		return "Invalid number" if !defined Signalbot_checkNumber($number);;
 		my $ret = Signalbot_setAccount($hash, $number);
+		# undef is success
 		if (!defined $ret) {
-			readingsSingleUpdate($hash, 'joinedGroups', "",1);
+			Signalbot_refreshGroups($hash);
 			return undef;
 		}
 		#if some error occured, register the old account
@@ -249,9 +253,9 @@ sub Signalbot_Set($@) {					#
 			return undef;
 		}
 		return $ret;
-	} elsif ( $cmd eq "setContact") {
+	} elsif ( $cmd eq "contact") {
 		if (@args<2 ) {
-			return "Usage: set ".$hash->{NAME}." setContact <number> <nickname>";
+			return "Usage: set ".$hash->{NAME}." contact <number> <nickname>";
 		} else {
 			my $number = shift @args;
 			my $nickname = join (" ",@args);
@@ -459,12 +463,9 @@ sub Signalbot_Get($@) {
 		my $reply=Signalbot_CallS($hash,"org.freedesktop.DBus.Introspectable.Introspect");
 		return undef;
 	} elsif ($cmd eq "accounts") {
-		if ($version<805) {
-			return "Signal-cli 0.8.5+ required for this functionality";
+		if ($version<900) {
+			return "Signal-cli 0.9.0 required for this functionality";
 		}
-#		if ($account ne "none") {
-#			return "listAccounts only available in unregistered mode";
-#		}
 		my $num=Signalbot_CallS($hash,"listAccounts");
 		return "Error in listAccounts" if !defined $num;
 		my @numlist=@$num;
@@ -801,23 +802,11 @@ sub Signalbot_setup2($@) {
 	my ($hash) = @_;
 	my $name=$hash->{NAME};
 	my $dbus=$hash->{helper}{dbus};
-	my $signalpath=$hash->{helper}{signalpath};
 	if (!defined $dbus) {
 		return "Error: Dbus not initialized";
 	}
 	if (!$dbus->initialize()) { $dbus->init_pending_send(); return; }
 	$hash->{helper}{init}=1;
-	#Initialize Signal listener
-	$dbus->send_call(
-            path        => '/org/freedesktop/DBus',
-            interface   => 'org.freedesktop.DBus',
-            member      => 'AddMatch',
-            destination => 'org.freedesktop.DBus',
-            signature   => 's',
-            body        => [ "type='signal',path='$signalpath'" 
-			],
-        );	
-	$hash->{STATE}="Connected";
 	
 	#Restore contactlist into internal hash
 	my $clist=ReadingsVal($hash->{NAME}, "contactList",undef);
@@ -842,17 +831,23 @@ sub Signalbot_setup2($@) {
 	$hash->{VERSION}="Signalbot:".$sv." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
 	if($hash->{helper}{version}>800) {
 		my $state=Signalbot_CallS($hash,"isRegistered");
+		#Signal-cli 0.9.0 : isRegistered not existing and will return undef when in multi-mode (or false with my PR)
+		if (!defined $state) {$state=0;}
 		if ($state) {
 			#if running daemon is running in -u mode set the signal path to default regardless of the registered number
 			$hash->{helper}{signalpath}='/org/asamk/Signal';
 			$account=Signalbot_CallS($hash,"getAccount");
-			#Remove all entries that are once available in registration or multi mode
+			#Workaround since signal-cli 0.9.0 did not include by getName() method - delete the reading, so its not confusing
+			if (!defined $account) { readingsDelete($hash,"account"); }
+			#Remove all entries that are only available in registration or multi mode
 			delete($gets{accounts});
-			delete($sets{setAccount});
+			delete($sets{account});
 			delete($sets{register});
 			delete($sets{captcha});
 			delete($sets{verify});
 			delete($sets{link});
+			$hash->{helper}{accounts}=0;
+			$hash->{helper}{multi}=0;
 		} else {
 			#else get accounts and add all numbers to the pulldown
 			my $num=Signalbot_CallS($hash,"listAccounts");
@@ -864,25 +859,41 @@ sub Signalbot_setup2($@) {
 				$ret .= $number =~ s/\/org\/asamk\/Signal\/_/+/rg;
 			}
 			$sets{setAccount}=$ret eq ""?"none":$ret;
-			#Only one number existing - choose automatically)
-			if(@numlist == 1) {
+			#Only one number existing - choose automatically if not already set)
+			if(@numlist == 1 && $account eq "none") {
 				Signalbot_setAccount($hash,$ret);
+				$account=$ret;
 			}
+			$hash->{helper}{accounts}=(@numlist);
+			$hash->{helper}{multi}=1;
 		}
+		#Initialize Signal listener only at the very end to make sure correct $signalpath is used
+		my $signalpath=$hash->{helper}{signalpath};
+		$dbus->send_call(
+				path        => '/org/freedesktop/DBus',
+				interface   => 'org.freedesktop.DBus',
+				member      => 'AddMatch',
+				destination => 'org.freedesktop.DBus',
+				signature   => 's',
+				body        => [ "type='signal',path='$signalpath'" 
+			],
+			);	
+		$hash->{STATE}="Connected to $signalpath";
+
 		#-u Mode or already registered
 		if ($state || $account ne "none") {
 			Signalbot_Call($hash,"listNumbers");
+			#Might make sense to call refreshGroups here, however, that is a sync call and might potentially take longer, so maybe no good idea in startup
 			readingsBeginUpdate($hash);
-			readingsBulkUpdate($hash, 'account', $account);
+			readingsBulkUpdate($hash, 'account', $account) if defined $account;
 			readingsBulkUpdate($hash, 'lastError', "ok");
-			$hash->{STATE} ="Connected";
 			readingsEndUpdate($hash, 1);
 			return undef;
 		} else {
 			readingsBeginUpdate($hash);
 			readingsBulkUpdate($hash, 'account', "none");
-			readingsBulkUpdate($hash, 'lastError', "No account registered - use setAccount to connect to an existing registration, link or register to get a new account");
-			$hash->{STATE} ="Registration mode";
+			readingsBulkUpdate($hash, 'joinedGroups', "");
+			readingsBulkUpdate($hash, 'lastError', "No account registered - use set account to connect to an existing registration, link or register to get a new account");
 			readingsEndUpdate($hash, 1);
 			return undef;
 		}
@@ -1293,7 +1304,7 @@ sub Signalbot_refreshGroups($@) {
 			}
 		}
 	}
-	readingsSingleUpdate($hash, 'joinedGroups', join(",",@grouplist),0);
+	readingsSingleUpdate($hash, 'joinedGroups', join(",",@grouplist),1);
 	return undef;
 }
 
@@ -1590,9 +1601,9 @@ sub Signalbot_Detail {
 	if (defined $DBus_missing) {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}
-	if($hash->{helper}{version}<805) {
-		$ret .= "<b>signal-cli v0.8.6+ required.</b><br>Please use installer to update<br>";
-		$ret .= "You can download the installer at <a href=http://test.de>test.de<\/a><br>"; #TODO: updated installer, put into www/signal/
+	if($hash->{helper}{version}<900) {
+		$ret .= "<b>signal-cli v0.9.0+ required.</b><br>Please use installer to install or update<br>";
+		$ret .= "You can download the installer <a href=fhem/signal/signal_install.sh>here<\/a> or find it in your fhem home at www/signal/signal_install.sh<br>";
 		$ret .= "Then run it with<br><b>sudo ./signal_install.sh</b><br><br>";
 		$ret .= "Note: The installer only supports Debian based Linux distributions like Ubuntu and Raspberry OS<br>";
 		$ret .= "      and X86 or armv7l CPUs<br>";
@@ -1600,11 +1611,18 @@ sub Signalbot_Detail {
 	}
 	my $current=ReadingsVal($name,"account","none");
 	my $account=$hash->{helper}{register};
+	my $multi=$hash->{helper}{multi};
 	my $verification=$hash->{helper}{verification};
+	my $accounts=$hash->{helper}{accounts};
+	
+	$ret .= "Signal-cli is running in single-mode, please consider starting it without -u parameter (e.g. by re-running the installer)<br>" if $multi==0;
+	$ret .= "You can download the installer <a href=fhem/signal/signal_install.sh>here<\/a> or find it in your fhem home at www/signal/signal_install.sh<br>" if $multi==0;
 
 	#Not registered and no registration in progress
-	if ($current eq "none" && !defined $account && !defined $verification) {
-		$ret .= "To get started you need to <b>register a phone number</b> to FHEM.<br><br>";
+	if ($current eq "none" && !defined $account && !defined $verification && $multi==1) {
+		$ret .= "To get started you need to <b>register a phone number</b> to FHEM ";
+		$ret .= "or use <b>set account</b> to use one of your existing ".$accounts." accounts" if $accounts>0;
+		$ret .= ".<br><br>";
 		$ret .= "It is recommended that you use an landline number using <b>set register</b> (remember to set the attribute <b>registerMethod</b> to 'Voice' if you need to receive a voice call instead of SMS)<br><br>";
 		$ret .= "Using a landline number typically will not interfere with using it for normal phone calls in parallel.<br>";
 		$ret .= "<b>Warning:</b> Registering will remove any prior registration (e.g. unregister your Smartphone using Signal Messsenger)!<br><br>";
@@ -1613,7 +1631,7 @@ sub Signalbot_Detail {
 	}
 
 	if(defined $account) {
-		$ret .= "<b>You registration for $account requires a Captcha to succeed.</b><br><br>";
+		$ret .= "<b>Your registration for $account requires a Captcha to succeed.</b><br><br>";
 		if ($FW_userAgent =~ /Mobile/) {
 			$ret .= "You seem to access FHEM from a mobile device. If the Signal Messenger is installed on this device, the Captcha will be catched by Signal and you will not be able to properly register FHEM. Recommendation is to do this from Windows where this can mostly be automated<br><br>";
 		}
@@ -1858,8 +1876,8 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<code>set Signalbot send "@({my $var=\"Joerg\";; return $var;;})" #FHEM "&( {plotAsPng('SVG_Temperatures')} )" Here come the current temperature plot</code><br>
 			</ul>
 			<br>
-		<li><b>set setContact &ltnumber&gt &ltname&gt</b><br>
-		<a id="Signalbot-set-setContact"></a>
+		<li><b>set contact &ltnumber&gt &ltname&gt</b><br>
+		<a id="Signalbot-set-contact"></a>
 		Define a nickname for a phone number to be used with the send command and in readings<br>
 		</li>
 		<li><b>set block #&ltgroupname&gt|&ltcontact&gt</b><br>
@@ -1897,8 +1915,8 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<a id="Signalbot-set-updateProfile"></a>
 		Set the name of the FHEM Signal user as well as an optional avatar picture.<br>
 		</li>
-		<li><b>set setAccount &ltnumber&gt</b><br>
-		<a id="Signalbot-set-setAccount"></a>
+		<li><b>set account &ltnumber&gt</b><br>
+		<a id="Signalbot-set-account"></a>
 		Switch to a different already existing and registered account. When signal-cli runs in multi mode, the available numbers will be pre-filled as dropdown or can be retrieved with "get account".<br>
 		</li>
 		<li><b>set register &ltnumber&gt</b><br>
@@ -1993,6 +2011,10 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			=123456 set lamp off<br>
 			where "123456" is a GoogleAuth token. The command after the token is optional. After the authentification the user stay for "authTimeout" seconds authentificated and can execute command without token (e.g. "=set lamp on").<br>
 			<b>If the attribute is not defined, no commands can be issued</b>
+		</li>
+		<li><b>defaultPeer</b><br>
+		<a id="Signalbot-attr-defaultPeer"></a>
+			If <b>send</b> is used without a recipient, the message will send to this account or group(with #)<br>
 		</li>
 		<br>
 	</ul>

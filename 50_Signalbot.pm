@@ -1,5 +1,5 @@
 ##############################################
-my $Signalbot_VERSION='$Id:3.0beta$';
+my $Signalbot_VERSION='$Id:3.0beta2$';
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -9,8 +9,6 @@ my $Signalbot_VERSION='$Id:3.0beta$';
 # 5 = Internal data and function calls
 # 4 = User actions and results
 # 3 = Error messages
-
-#Wenn kein Signal-cli gefunden wird, alle set/get blockieren? Sonst gibt es potentiell expections
 
 package main;
 
@@ -162,6 +160,7 @@ sub Signalbot_Set($@) {					#
 		my $ret = Signalbot_setup($hash);
 		$hash->{STATE} = $ret if defined $ret;
 		$hash->{helper}{qr}=undef;
+		Signalbot_createRegfiles($hash);
 		return undef;
 	}
 
@@ -820,6 +819,7 @@ sub Signalbot_setup2($@) {
 	my $version=Signalbot_CallS($hash,"version");
 	my $account=ReadingsVal($name,"account","none");
 	if (!defined $version) {
+		$hash->{helper}{version}=0; #prevent uninitalized value in case of service not present
 		return "Error calling version";
 	}
 	
@@ -1497,6 +1497,11 @@ sub Signalbot_createRegfiles($) {
 	my $ip=qx(hostname -I);
 	my @ipp=split(" ",$ip);
 	$ip=$ipp[0];
+	my $web=$hash->{CL}{SNAME};
+	my $csrf=AttrVal($web,"csrfToken",undef);
+	if (!defined $csrf) { $csrf=InternalVal($web,"CSRFTOKEN","none"); }
+	Log3 $hash->{NAME}, 3, $hash->{NAME}.": Using CSRF Token $csrf";
+	
 	my $fh;
 	#1. For Windows
 	my $tmpfilename="www/signal/signalcaptcha.reg";
@@ -1509,7 +1514,13 @@ sub Signalbot_createRegfiles($) {
 	$msg .= '[HKEY_CLASSES_ROOT\signalcaptcha\shell\open\command]'."\n";
 	$msg .= '@="powershell.exe Start-Process -FilePath ( $(\'http://';
 	$msg .= $ip;
-	$msg .= ':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20\'+($(\'%1\') -replace \'^(.*)/$\',\'$1\') ) )"'."\n";
+	$msg .= ':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20\'+($(\'%1\')';
+	if ($csrf ne "none") {
+		$msg.= '+$(\'&fwcsrf='.$csrf.'\')';
+		$msg .= ' -replace \'^(.*)/&\',\'$1&\') ) )"'."\n";
+	} else {
+		$msg .= ' -replace \'^(.*)/$\',\'$1\') ) )"'."\n";
+	}
 	if(!open($fh, ">", $tmpfilename,)) {
 		Log3 $hash->{NAME}, 3, $hash->{NAME}.": Can't write $tmpfilename";
 	} else {
@@ -1520,7 +1531,11 @@ sub Signalbot_createRegfiles($) {
 	$tmpfilename="www/signal/signalcaptcha.desktop";
 	$msg  = "[Desktop Entry]\n";
 	$msg .= "Name=Signalcaptcha\n";
-	$msg .= 'Exec=xdg-open http://'.$ip.':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20%u'."\n";
+	$msg .= 'Exec=xdg-open http://'.$ip.':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20%u';
+	if ($csrf ne "none") {
+		$msg.= '&fwcsrf='.$csrf;
+	}
+	$msg .="\n";
 	$msg .= "Type=Application\n";
 	$msg .= "Terminal=false\n";
 	$msg .= "StartupNotify=false\n";

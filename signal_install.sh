@@ -1,5 +1,6 @@
 #!/bin/bash
-SCRIPTVERSION="$Id:3.0beta$"
+#$Id:3.0beta$
+SCRIPTVERSION="3.0beta$"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -212,6 +213,7 @@ fi
 install_by_file /usr/include/dbus-1.0/dbus/dbus.h libdbus-1-dev
 install_by_file /usr/share/build-essential/essential-packages-list build-essential
 install_by_file /usr/share/doc/libimage-librsvg-perl libimage-librsvg-perl
+install_by_file /usr/share/man/man3/URI::Escape.3pm.gz liburi-perl
 
 cat >$TMPFILE <<EOF
 #!/usr/bin/perl -w

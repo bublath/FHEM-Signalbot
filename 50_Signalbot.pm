@@ -1,5 +1,6 @@
 ##############################################
-my $Signalbot_VERSION='$Id:3.0beta2$';
+#$Id:3.0beta2$
+my $Signalbot_VERSION="3.0beta2";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -18,7 +19,7 @@ use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-use Data::Dumper;
+#use Data::Dumper;
 use Time::HiRes qw( usleep );
 use URI::Escape;
 use HttpUtils;
@@ -176,6 +177,9 @@ sub Signalbot_Set($@) {					#
 		# undef is success
 		if (!defined $ret) {
 			Signalbot_refreshGroups($hash);
+			$hash->{helper}{qr}=undef;
+			$hash->{helper}{register}=undef;
+			$hash->{helper}{verification}=undef;
 			return undef;
 		}
 		#if some error occured, register the old account
@@ -793,6 +797,7 @@ sub Signalbot_setup($@){
 	$hash->{FD}=$dbus->fileno();
 	$selectlist{"$name.dbus"} = $hash;
 	$hash->{STATE}="Connecting";
+	Signalbot_fetchFile($hash,"svn.fhem.de","/fhem/trunk/fhem/contrib/signal/signal_install.sh","www/signal/signal_install.sh");
 	return undef;
 }
 
@@ -826,9 +831,7 @@ sub Signalbot_setup2($@) {
 	my @ver=split('\.',$version);
 	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
 	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
-	$Signalbot_VERSION =~ /^\$Id:(.*)\$$/;
-	my $sv= $1;
-	$hash->{VERSION}="Signalbot:".$sv." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
+	$hash->{VERSION}="Signalbot:".$Signalbot_VERSION." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
 	if($hash->{helper}{version}>800) {
 		my $state=Signalbot_CallS($hash,"isRegistered");
 		#Signal-cli 0.9.0 : isRegistered not existing and will return undef when in multi-mode (or false with my PR)
@@ -858,7 +861,7 @@ sub Signalbot_setup2($@) {
 				if ($ret ne "") {$ret.=",";}
 				$ret .= $number =~ s/\/org\/asamk\/Signal\/_/+/rg;
 			}
-			$sets{setAccount}=$ret eq ""?"none":$ret;
+			$sets{account}=$ret eq ""?"none":$ret;
 			#Only one number existing - choose automatically if not already set)
 			if(@numlist == 1 && $account eq "none") {
 				Signalbot_setAccount($hash,$ret);
@@ -1502,6 +1505,10 @@ sub Signalbot_createRegfiles($) {
 	if (!defined $csrf) { $csrf=InternalVal($web,"CSRFTOKEN","none"); }
 	Log3 $hash->{NAME}, 3, $hash->{NAME}.": Using CSRF Token $csrf";
 	
+	if (! -d "www/signal") {
+		mkdir("www/signal");
+	}
+		
 	my $fh;
 	#1. For Windows
 	my $tmpfilename="www/signal/signalcaptcha.reg";
@@ -1605,6 +1612,23 @@ sub Signalbot_Init($$) {				#
 	return;
 }
 
+sub Signalbot_fetchFile($$$$) {
+	my ($hash, $host, $path, $name) = @_;
+	my $msg=GetHttpFile($host,$path);
+	if ($msg) {
+		if (! -d "www/signal") {
+			mkdir("www/signal");
+		}
+		my $fh;
+		if(!open($fh, ">", $name,)) {
+			Log3 $hash->{NAME}, 3, $hash->{NAME}.": Can't write $name";
+		} else {
+			print $fh $msg;
+			close($fh);
+		}
+	}
+}
+
 sub Signalbot_Detail {
 	my ($FW_wname, $name, $room, $pageHash) = @_;
 	my $hash=$defs{$name};
@@ -1616,22 +1640,26 @@ sub Signalbot_Detail {
 	if (defined $DBus_missing) {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}
+	my $multi=$hash->{helper}{multi};
 	if($hash->{helper}{version}<900) {
 		$ret .= "<b>signal-cli v0.9.0+ required.</b><br>Please use installer to install or update<br>";
-		$ret .= "You can download the installer <a href=fhem/signal/signal_install.sh>here<\/a> or find it in your fhem home at www/signal/signal_install.sh<br>";
-		$ret .= "Then run it with<br><b>sudo ./signal_install.sh</b><br><br>";
 		$ret .= "Note: The installer only supports Debian based Linux distributions like Ubuntu and Raspberry OS<br>";
 		$ret .= "      and X86 or armv7l CPUs<br>";
-	return $ret;
 	}
+	if ($multi==0) {
+		$ret .= "Signal-cli is running in single-mode, please consider starting it without -u parameter (e.g. by re-running the installer)<br>";
+	}
+	if($hash->{helper}{version}<900 || $multi==0) {
+		$ret .= 'You can download the installer <a href="www/signal/signal_install.sh" download>here</a> or your www/signal directory and run it with<br><b>sudo ./signal_install.sh</b><br><br>';
+		$ret .= "Alternatively go to <a href=https://svn.fhem.de/fhem/trunk/fhem/thirdparty>FHEM SVN thirdparty</a> and download the matching Debian package<br>";
+		$ret .= "Install with e.g. <b>sudo apt install ./signal-cli-dbus_0.9.0-1_armhf.deb</b> (./ is important to tell apt this is a file)<br><br>";
+	}
+	return $ret if ($hash->{helper}{version}<900);
+	
 	my $current=ReadingsVal($name,"account","none");
 	my $account=$hash->{helper}{register};
-	my $multi=$hash->{helper}{multi};
 	my $verification=$hash->{helper}{verification};
 	my $accounts=$hash->{helper}{accounts};
-	
-	$ret .= "Signal-cli is running in single-mode, please consider starting it without -u parameter (e.g. by re-running the installer)<br>" if $multi==0;
-	$ret .= "You can download the installer <a href=fhem/signal/signal_install.sh>here<\/a> or find it in your fhem home at www/signal/signal_install.sh<br>" if $multi==0;
 
 	#Not registered and no registration in progress
 	if ($current eq "none" && !defined $account && !defined $verification && $multi==1) {
@@ -1669,13 +1697,13 @@ sub Signalbot_Detail {
 		$ret .="If you move over the Name column you will see that it actually starts with signalcaptcha://<br>";
 		$ret .="Right click and chose Copy->Link Adress<br>";
 		$ret .="Return here and use <b>set captcha</b> to paste it and continue registration.<br><br>";
-		$ret .='<img src="fhem/signal/chrome-x11-snapshot.png">';
+		$ret .='<img src="https://svn.fhem.de/fhem/trunk/fhem/contrib/signal/chrome-x11-snapshot.png"><br>';
 		}
 		if ($FW_userAgent =~ /Firefox/ ) {
 		$ret .="You seem to use Firefox. Here find the 'Console' tab. You should see a 'prevented navigation' entry.<br>";
 		$ret .="Copy&Paste the signalcaptcha:// string (between quotes).<br>";
 		$ret .="Return here and use <b>set captcha</b> to paste it and continue registration.<br><br>";
-		$ret .='<img src="fhem/signal/firefox-x11-snapshot.png">';
+		$ret .='<img src="https://svn.fhem.de/fhem/trunk/fhem/contrib/signal/firefox-x11-snapshot.png"><br>';
 		}
 	}
 
@@ -1870,7 +1898,7 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 	<a id="Signalbot-set"></a>
 	<b>Set</b>
 	<ul>
-		<li><b>set &lt;name&gt; &lt;send&gt; [@&lt;Recipient1&gt; ... @&lt;RecipientN&gt;] [#&lt;GroupId1&gt; ... #&lt;GroupIdN&gt;] [&&lt;Attachment1&gt; ... &&lt;AttachmentN&gt;] [&lt;Text&gt;]</b><br>
+		<li><b>set send [@&lt;Recipient1&gt; ... @&lt;RecipientN&gt;] [#&lt;GroupId1&gt; ... #&lt;GroupIdN&gt;] [&&lt;Attachment1&gt; ... &&lt;AttachmentN&gt;] [&lt;Text&gt;]</b><br>
 			<a id="Signalbot-set-send"></a>
 			Send a message to a Signal recipient using @Name or @+49xxx as well as groups with #Group or #@Group along with an attachment with &<path to file> and a message.
 		</li>

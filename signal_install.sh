@@ -277,6 +277,7 @@ fi
 
 if [ $NEEDINSTALL = 1 ]; then
 	echo "Proceed with signal cli installation"
+	stop_service
 	cd /tmp
 	echo -n "Downloading signal-cli $SIGNALVERSION..."
 	wget -qN https://github.com/AsamK/signal-cli/releases/download/v$SIGNALVERSION/signal-cli-$SIGNALVERSION.tar.gz
@@ -305,8 +306,6 @@ if [ $NEEDINSTALL = 1 ]; then
 			rm -f $LIBDIR/libzkgroup.so $LIBDIR/libsignal_jni.so
 			echo "done"
 		fi
-		echo "done"
-		echo -n "Changing file ownership ..."
 		echo "done"
 		rm -f /tmp/signal-cli-$SIGNALVERSION.tar.gz
 	fi

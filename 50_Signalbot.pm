@@ -1,6 +1,6 @@
 ##############################################
-#$Id:3.0beta2$
-my $Signalbot_VERSION="3.0beta2";
+#$Id:3.0beta3$
+my $Signalbot_VERSION="3.0beta3";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -249,10 +249,6 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 			$hash->{helper}{register}=undef;
 			$hash->{helper}{verification}=undef;
-			#Switch back to device overview - experimental hint from rudolphkoenig https://forum.fhem.de/index.php/topic,122771.msg1173835.html#new
-			my $web=$hash->{CL}{SNAME};
-			my $peer=$hash->{CL}{PEER};
-			DoTrigger($web,"JS#$peer:location.href=".'"'."?detail=$name".'"');
 			return undef;
 		}
 		return $ret;
@@ -798,6 +794,7 @@ sub Signalbot_setup($@){
 	$selectlist{"$name.dbus"} = $hash;
 	$hash->{STATE}="Connecting";
 	Signalbot_fetchFile($hash,"svn.fhem.de","/fhem/trunk/fhem/contrib/signal/signal_install.sh","www/signal/signal_install.sh");
+	chmod 0755, "www/signal/signal_install.sh";
 	return undef;
 }
 
@@ -1644,8 +1641,8 @@ sub Signalbot_Detail {
 	}
 	if($hash->{helper}{version}<900 || $multi==0) {
 		$ret .= 'You can download the installer <a href="www/signal/signal_install.sh" download>here</a> or your www/signal directory and run it with<br><b>sudo ./signal_install.sh</b><br><br>';
-		$ret .= "Alternatively go to <a href=https://svn.fhem.de/fhem/trunk/fhem/thirdparty>FHEM SVN thirdparty</a> and download the matching Debian package<br>";
-		$ret .= "Install with e.g. <b>sudo apt install ./signal-cli-dbus_0.9.0-1_armhf.deb</b> (./ is important to tell apt this is a file)<br><br>";
+		$ret .= "Alternatively go to <a href=https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signal-cli-packages>FHEM SVN thirdparty</a> and download the matching Debian package<br>";
+		$ret .= "Install with e.g. <b>sudo apt install ./signal-cli-dbus_0.9.0-1_buster_armhf.deb</b> (./ is important to tell apt this is a file)<br><br>";
 	}
 	return $ret if ($hash->{helper}{version}<900);
 	

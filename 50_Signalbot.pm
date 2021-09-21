@@ -30,7 +30,7 @@ eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
 my %sets = (
   "send" => "textField",
   "reinit" => "noArg",
-  "account" => "textField",			#V0.9.0+
+  "signalAccount" => "none",		#V0.9.0+
   "contact" => "textField",
   "createGroup" => "textField",		#Call updategroups with empty group parameter, mandatory name and optional avatar picture
   "invite" => "textField",			#Call updategroups with mandatory group name and mandatory list of numbers to join
@@ -169,7 +169,7 @@ sub Signalbot_Set($@) {					#
 	if ( $cmd ne "send") {
 		@args=parse_line(' ',0,join(" ",@args));
 	}
-	if ( $cmd eq "account" ) {
+	if ( $cmd eq "signalAccount" ) {
 		#When registered, first switch back to default account
 		my $number = shift @args;
 		return "Invalid number" if !defined Signalbot_checkNumber($number);;
@@ -184,7 +184,7 @@ sub Signalbot_Set($@) {					#
 		}
 		#if some error occured, register the old account
 		$ret = Signalbot_setAccount($hash,$account);
-		return $ret;
+		return "Error changing account, using previous account $account";
 	} elsif ($cmd eq "link") {
 		my $qrcode=Signalbot_CallS($hash,"link","FHEM");
 		
@@ -440,7 +440,7 @@ sub Signalbot_Get($@) {
 	my ($hash, $name, @args) = @_;
 	
 	my $numberOfArgs  = int(@args);
-	return "Signalbot_Set: No cmd specified for get" if ( $numberOfArgs < 1 );
+	return "Signalbot_Get: No cmd specified for get" if ( $numberOfArgs < 1 );
 
 	my $cmd = shift @args;
 
@@ -844,7 +844,7 @@ sub Signalbot_setup2($@) {
 			if (!defined $account) { readingsDelete($hash,"account"); }
 			#Remove all entries that are only available in registration or multi mode
 			delete($gets{accounts});
-			delete($sets{account});
+			delete($sets{signalAccount});
 			delete($sets{register});
 			delete($sets{captcha});
 			delete($sets{verify});
@@ -861,7 +861,7 @@ sub Signalbot_setup2($@) {
 				if ($ret ne "") {$ret.=",";}
 				$ret .= $number =~ s/\/org\/asamk\/Signal\/_/+/rg;
 			}
-			$sets{account}=$ret eq ""?"none":$ret;
+			$sets{signalAccount}=$ret eq ""?"none":$ret;
 			#Only one number existing - choose automatically if not already set)
 			if(@numlist == 1 && $account eq "none") {
 				Signalbot_setAccount($hash,$ret);
@@ -1500,10 +1500,6 @@ sub Signalbot_createRegfiles($) {
 	my $ip=qx(hostname -I);
 	my @ipp=split(" ",$ip);
 	$ip=$ipp[0];
-	my $web=$hash->{CL}{SNAME};
-	my $csrf=AttrVal($web,"csrfToken",undef);
-	if (!defined $csrf) { $csrf=InternalVal($web,"CSRFTOKEN","none"); }
-	Log3 $hash->{NAME}, 3, $hash->{NAME}.": Using CSRF Token $csrf";
 	
 	if (! -d "www/signal") {
 		mkdir("www/signal");
@@ -1522,8 +1518,9 @@ sub Signalbot_createRegfiles($) {
 	$msg .= '@="powershell.exe Start-Process -FilePath ( $(\'http://';
 	$msg .= $ip;
 	$msg .= ':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20\'+($(\'%1\')';
-	if ($csrf ne "none") {
-		$msg.= '+$(\'&fwcsrf='.$csrf.'\')';
+	#Captcha has an extra "\" at the end which makes replacing with CSRF a bit more complicated
+	if ($FW_CSRF ne "") {
+		$msg.= '+$(\''.$FW_CSRF.'\')';
 		$msg .= ' -replace \'^(.*)/&\',\'$1&\') ) )"'."\n";
 	} else {
 		$msg .= ' -replace \'^(.*)/$\',\'$1\') ) )"'."\n";
@@ -1538,11 +1535,7 @@ sub Signalbot_createRegfiles($) {
 	$tmpfilename="www/signal/signalcaptcha.desktop";
 	$msg  = "[Desktop Entry]\n";
 	$msg .= "Name=Signalcaptcha\n";
-	$msg .= 'Exec=xdg-open http://'.$ip.':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20%u';
-	if ($csrf ne "none") {
-		$msg.= '&fwcsrf='.$csrf;
-	}
-	$msg .="\n";
+	$msg .= 'Exec=xdg-open http://'.$ip.':8083/fhem?cmd=set%%20'.$hash->{NAME}.'%%20captcha%%20%u'.$FW_CSRF."\n";
 	$msg .= "Type=Application\n";
 	$msg .= "Terminal=false\n";
 	$msg .= "StartupNotify=false\n";
@@ -1958,9 +1951,9 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<a id="Signalbot-set-updateProfile"></a>
 		Set the name of the FHEM Signal user as well as an optional avatar picture.<br>
 		</li>
-		<li><b>set account &ltnumber&gt</b><br>
-		<a id="Signalbot-set-account"></a>
-		Switch to a different already existing and registered account. When signal-cli runs in multi mode, the available numbers will be pre-filled as dropdown or can be retrieved with "get account".<br>
+		<li><b>set signalAccount &ltnumber&gt</b><br>
+		<a id="Signalbot-set-signalAccount"></a>
+		Switch to a different already existing and registered account. When signal-cli runs in multi mode, the available numbers will be pre-filled as dropdown or can be updated by doing a "reinit".<br>
 		</li>
 		<li><b>set register &ltnumber&gt</b><br>
 		<a id="Signalbot-set-register"></a>
@@ -2062,7 +2055,7 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<br>
 	</ul>
 	<br>
-	<a id="SignalbotReadings"></a>
+	<a id="Signalbot-readings"></a>
 	<b>Readings</b>
 	<ul>
 		<br>

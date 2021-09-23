@@ -3,9 +3,6 @@ SCRIPTVERSION="$Id:2.1$"
 # Author: Adimarantis
 # License: GPL
 #Install script for FHEM including signal-cli
-if [ -z "$PHONE" ]; then
-	PHONE="+49xxxx"
-fi
 FHEMVERSION=6.0
 FHEMUSER=fhem
 FHEMGROUP=fhem
@@ -16,11 +13,11 @@ TMPFILE=/tmp/signal$$.tmp
 OPERATION=$1
 BUILDDIR=$HOME/fhem
 #Space separated list of additional packages, installed with apt (linux), cpan (perl) or npm (node.js)
-APT="usbutils libimage-librsvg-perl perl libcpan-changes-perl"
+APT="usbutils libimage-librsvg-perl perl libcpan-changes-perl liburi-perl"
 CPAN="local::lib"
 NPM=
 #for signal-cli
-APT="$APT wget haveged default-jre qrencode zip base-files  libdbus-1-dev zip build-essential"
+APT="$APT wget default-jre zip base-files  libdbus-1-dev zip build-essential"
 #APT="$APT wget haveged default-jre qrencode pkg-config gcc zip libexpat1-dev libxml-parser-perl libtemplate-perl libxml-xpath-perl build-essential xml-twig-tools base-files"
 CPAN="$CPAN Protocol::DBus"
 #for DBLOG
@@ -67,7 +64,6 @@ echo "Please verify that these settigns are correct:"
 echo "FHEM-Version:              $FHEMVERSION"
 echo "SIGNALBOT Repository       $SIGNALBOTSOURCE"
 echo "BUILD directory            $BUILDDIR"
-echo "signal-cli phone number    $PHONE"
 echo "User $FHEMUSER ($FHEM_UID)"
 echo "Group $FHEMGROUP ($FHEM_GID)"
 
@@ -225,7 +221,6 @@ services:
             FHEM_GID: $FHEM_GID
             FHEMUSER: $FHEMUSER
             FHEMGROUP: $FHEMGROUP
-            PHONE: "$PHONE"
             TIMEOUT: 10
             RESTART: 1
             TELNETPORT: 7072
@@ -264,7 +259,6 @@ cat >entry.sh <<EOF
 #!/bin/bash
 cd /opt/fhem
 if [ -e /tmp/signal_install.log ]; then
-	export PHONE
 	export FHEMUSER
 	./signal_install.sh start >/tmp/start.log 2>/tmp/start.err
 fi
@@ -346,10 +340,8 @@ create_docker() {
 	#Get latest scripts anyway
 	echo -n "Downloading/Updating Signalbot..."
 	cd $BUILDDIR/fhem-$FHEMVERSION
-	#wget -qN wget https://raw.githubusercontent.com/bublath/FHEM-Signalbot/main/signal_install.sh
+	wget -qN wget https://svn.fhem.de/fhem/trunk/fhem/contrib/signal/signal_install.sh
 	chmod a+rx signal_install.sh
-	cd FHEM
-	#wget -qN wget https://raw.githubusercontent.com/bublath/FHEM-Signalbot/main/50_Signalbot.pm
 	echo "done"
 	echo -n "Adjusting permissions..."
 	chown -R $FHEMUSER: $BUILDDIR/fhem-$FHEMVERSION 
@@ -358,7 +350,7 @@ create_docker() {
 	cd $BUILDDIR
 	cp entry.sh fhem-$FHEMVERSION
 	docker-compose up -d
-	docker exec -ti fhem_signal /opt/fhem/signal_install.sh all $PHONE
+	docker exec -ti fhem_signal /opt/fhem/signal_install.sh docker
 # Restart container now that everything is set
 	docker-compose down
 	docker-compose up -d

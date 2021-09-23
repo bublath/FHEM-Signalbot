@@ -19,15 +19,17 @@ addsignaluser() {
           --home /nonexistent \
           --gecos "signal-cli user" \
           --shell /bin/false \
-          nginx  >/dev/null
+          signal-cli  >/dev/null
     fi
 }
 
 case "$1" in
     install)
+		service signal stop
         addsignaluser
         ;;
     upgrade)
+		service signal stop
         addsignaluser
         ;;
 

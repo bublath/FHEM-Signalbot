@@ -5,6 +5,7 @@ set -e
 case "$1" in
     remove|deconfigure|remove-in-favour|deconfigure-in-favour)
 		service signal stop
+		exit 0
         ;;
     upgrade|failed-upgrade)
         ;;

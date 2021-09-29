@@ -1,6 +1,6 @@
 ##############################################
-#$Id:3.0beta3$
-my $Signalbot_VERSION="3.0beta3";
+#$Id$
+my $Signalbot_VERSION="3.0";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -342,7 +342,7 @@ sub Signalbot_Set($@) {					#
 		eval { $fullstring=decode_utf8($fullstring); };
 			Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Error from decode" if $@;
 			
-		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:$fullstring:";
+		Log3 $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:" . encode_utf8($fullstring) . ":";
 		my $tmpmessage = $fullstring =~ s/\\n/\x0a/rg;
 		my @args=parse_line(' ',0,$tmpmessage);
 		
@@ -1310,7 +1310,7 @@ sub Signalbot_refreshGroups($@) {
 
 sub Signalbot_sendMessage($@) {
 	my ( $hash,$rec,$att,$mes ) = @_;
-	Log3 $hash->{NAME}, 4, $hash->{NAME}.": sendMessage called for $rec:$att:$mes"; 
+	Log3 $hash->{NAME}, 4, $hash->{NAME}.": sendMessage called for $rec:$att:".encode_utf8($mes); 
 
 	my @recorg= split(/,/,$rec);
 	my @attach=split(/,/,$att);
@@ -1631,6 +1631,7 @@ sub Signalbot_Detail {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}
 	my $multi=$hash->{helper}{multi};
+	$multi=0 if !defined $multi;
 	if($hash->{helper}{version}<900) {
 		$ret .= "<b>signal-cli v0.9.0+ required.</b><br>Please use installer to install or update<br>";
 		$ret .= "Note: The installer only supports Debian based Linux distributions like Ubuntu and Raspberry OS<br>";
@@ -1854,8 +1855,8 @@ sub SignalBot_IdentifyStream($$) {
 
 =pod
 =item device
-=item summary provides an interface to the Signal Messenger, via signal_cli running as dbus daemon 
-=item summary_DE stellt eine Schnittstelle zum Signal Messenger ueber das signal_cli Paket in dbus daemon modus zur Verfuegung
+=item summary Integration of Signal Messenger via signal_cli running as dbus daemon 
+=item summary_DE Integration des Signal Messenger ueber signal_cli im dbus daemon modus
 
 =begin html
 

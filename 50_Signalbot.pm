@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.1";
+my $Signalbot_VERSION="3.2";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -833,6 +833,7 @@ sub Signalbot_setup2($@) {
 	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
 	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
 	$hash->{VERSION}="Signalbot:".$Signalbot_VERSION." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
+	$hash->{model}=SignalBot_OSRel();
 	if($hash->{helper}{version}>800) {
 		my $state=Signalbot_CallS($hash,"isRegistered");
 		#Signal-cli 0.9.0 : isRegistered not existing and will return undef when in multi-mode (or false with my PR)
@@ -1820,6 +1821,23 @@ sub SignalBot_replaceCommands(@) {
 	return (undef,@processed);
 }
 
+#Get OSRelease Version
+sub SignalBot_OSRel() {
+	my $fh;
+
+	if (!open($fh, "<", "/etc/os-release")) {
+		return "Unknown";
+	}
+	while (my $line = <$fh>) {
+		chomp($line);
+		if ($line =~ /PRETTY_NAME="(.*)"/) {
+			close ($fh);
+			return $1;
+		}
+	}
+	close ($fh);
+	return "Unknown";
+}
 
 ######################################
 #  Get a string and identify possible media streams

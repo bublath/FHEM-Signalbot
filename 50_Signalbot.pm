@@ -366,11 +366,11 @@ sub Signalbot_Set($@) {					#
 
 		#Check for embedded fhem/perl commands
 		my $err;
-		($err, @recipients) = SignalBot_replaceCommands($hash,@recipients);
+		($err, @recipients) = Signalbot_replaceCommands($hash,@recipients);
 		if ($err) { return $err; }
-		($err, @groups) = SignalBot_replaceCommands($hash,@groups);
+		($err, @groups) = Signalbot_replaceCommands($hash,@groups);
 		if ($err) { return $err; }
-		($err, @attachments) = SignalBot_replaceCommands($hash,@attachments);
+		($err, @attachments) = Signalbot_replaceCommands($hash,@attachments);
 		if ($err) { return $err; }
 		
 		#Am Schluss eine Schleife über die Attachments und alle die mit /tmp/signalbot anfangen löschen (unlink)
@@ -563,7 +563,7 @@ sub Signalbot_command($@){
 				$hash->{helper}{auth}{$sender}=1;
 				#Remove potential old timer so countdown start from scratch
 				RemoveInternalTimer("$hash->{NAME} $sender");
-				InternalTimer(gettimeofday() + $timeout, 'SignalBot_authTimeout', "$hash->{NAME} $sender", 0);
+				InternalTimer(gettimeofday() + $timeout, 'Signalbot_authTimeout', "$hash->{NAME} $sender", 0);
 				Signalbot_sendMessage($hash,$sender,"","You have control for ".$timeout."s");
 				$cmd=$restcmd;
 			} else {
@@ -591,7 +591,7 @@ sub Signalbot_command($@){
 }
 
 #Reset auth after timeout
-sub SignalBot_authTimeout($@) {
+sub Signalbot_authTimeout($@) {
 	my ($val)=@_;
 	my ($name,$sender)=split(" ",$val);
 	my $hash = $defs{$name};
@@ -657,7 +657,7 @@ sub Signalbot_MessageReceived ($@) {
 		readingsEndUpdate($hash, 0);
 
 		my $cmd=AttrVal($hash->{NAME},"cmdKeyword",undef);
-		if ($message =~ /^$cmd(.*)/) { 
+		if (defined $cmd && $message =~ /^$cmd(.*)/) { 
 			$babble=0; #Skip Babble execution in command mode
 			$message=Signalbot_command($hash,$source,$message);
 		}
@@ -833,7 +833,7 @@ sub Signalbot_setup2($@) {
 	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
 	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
 	$hash->{VERSION}="Signalbot:".$Signalbot_VERSION." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
-	$hash->{model}=SignalBot_OSRel();
+	$hash->{model}=Signalbot_OSRel();
 	if($hash->{helper}{version}>800) {
 		my $state=Signalbot_CallS($hash,"isRegistered");
 		#Signal-cli 0.9.0 : isRegistered not existing and will return undef when in multi-mode (or false with my PR)
@@ -1758,7 +1758,7 @@ sub Signalbot_Undef($$) {				#
 #If its a media stream, a file is being created and the temporary filename (delete later!) is returned
 #Question: more complex commands could contain spaces but that will require more complex parsing
 
-sub SignalBot_replaceCommands(@) {
+sub Signalbot_replaceCommands(@) {
 	my ($hash, @data) = @_;
 	
 	my @processed=();
@@ -1788,7 +1788,7 @@ sub SignalBot_replaceCommands(@) {
 				return ($msg, @processed); 
 			}
 			
-			my ( $isMediaStream, $type ) = SignalBot_IdentifyStream( $hash, $msg );
+			my ( $isMediaStream, $type ) = Signalbot_IdentifyStream( $hash, $msg );
 			if ($isMediaStream<0) {
 				Log3 $hash->{NAME}, 5, $hash->{NAME}.": Media stream found $isMediaStream $type";
 				my $tmpfilename="/tmp/signalbot".gettimeofday().".".$type;
@@ -1822,7 +1822,7 @@ sub SignalBot_replaceCommands(@) {
 }
 
 #Get OSRelease Version
-sub SignalBot_OSRel() {
+sub Signalbot_OSRel() {
 	my $fh;
 
 	if (!open($fh, "<", "/etc/os-release")) {
@@ -1849,7 +1849,7 @@ sub SignalBot_OSRel() {
 #   -3 for other media
 # and extension without dot as 2nd list element
 
-sub SignalBot_IdentifyStream($$) {
+sub Signalbot_IdentifyStream($$) {
 	my ($hash, $msg) = @_;
 
 	# signatures for media files are documented here --> https://en.wikipedia.org/wiki/List_of_file_signatures

@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.2";
+my $Signalbot_VERSION="3.3";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -50,6 +50,7 @@ my %sets = (
   "contacts"      => "all,nonblocked",			#V0.8.1+
   "groups"        => "all,active,nonblocked",	#V0.8.1+
   "accounts"      => "noArg",					#V0.9.0+
+  "favorites"     => "noArg",
 #  "introspective" => "noArg"
 );
 
@@ -111,6 +112,7 @@ sub Signalbot_Initialize($) {
   $hash->{GetFn}     = 	"Signalbot_Get";
   $hash->{UndefFn}   = 	"Signalbot_Undef";
   $hash->{MessageReceived} = "Signalbot_MessageReceived";
+  $hash->{MessageReceivedV2} = "Signalbot_MessageReceivedV2";
   $hash->{ReceiptReceived} = "Signalbot_ReceiptReceived";
   $hash->{version}		= "Signalbot_Version_cb";
   $hash->{updateGroup}  = "Signalbot_UpdateGroup_cb";
@@ -125,6 +127,8 @@ sub Signalbot_Initialize($) {
 												"authTimeout ".
 												"authDev ".
 												"cmdKeyword ".
+												"cmdFavorite ".
+												"favorites ".
 												"autoJoin:yes,no ".
 												"registerMethod:SMS,Voice ".
 												"$readingFnAttributes";
@@ -474,6 +478,27 @@ sub Signalbot_Get($@) {
 			$ret.=$account."\n";
 		}
 		return $ret;
+	} elsif ($cmd eq "favorites") {
+		my @fav=split(";",AttrVal($name,"favorites",""));
+		return "No favorites defined" if @fav==0;
+		my $ret="Defined favorites:\n\n";
+		my $format="%2i(%s)%-30s\n";
+		$ret.="ID(Auth)Command[alias]\n";
+		my $cnt=1;
+		foreach (@fav) {
+			my $ff=$_;
+			$ff =~ /(\[.*\])?([\-]?)(.*)/;
+			my $aa="y";
+			if ($2 eq "-") {
+				$aa="n";
+			}
+			$ret.=sprintf($format,$cnt,$aa,$3);
+			if ($1 ne "") {
+				$ret.="     $1\n";
+			}
+			$cnt++;
+		}
+		return $ret;
 	}
 	
 	if ($gets{$cmd} =~ /$arg/) {
@@ -573,8 +598,53 @@ sub Signalbot_command($@){
 				return $cmd;
 			}
 		}
+		my $auth=0;
+		if (defined $hash->{helper}{auth}{$sender} && $hash->{helper}{auth}{$sender}==1) {
+			$auth=1;
+		}
+		my $fav=AttrVal($hash->{NAME},"cmdFavorite",undef);
+		if (defined $fav && defined $cc[0] && $cc[0] eq $fav) {
+			shift @cc;
+			if (@cc>0) {
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes favorite command $cc[0]";
+				my @favorites=split(";",AttrVal($hash->{NAME},"favorites",""));
+				if ($cc[0] =~/\d+$/) {
+					#Favorite by index
+					my $fid=$cc[0]-1;
+					if ($fid<@favorites) {
+						$cmd=$favorites[$fid];
+						$cmd =~ /(\[.*\])?([\-]?)(.*)/;
+						$cmd=$3 if defined $3;
+						Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender requests favorite command:$cmd";
+					} else {
+						$cmd="";
+						Signalbot_sendMessage($hash,$sender,"","favorite #$cc[0] not defined");
+						Log3 $hash->{NAME}, 4, $hash->{NAME}.": favorite #$cc[0] not defined";
+					}
+				} else {
+					my $alias=join(" ",@cc);
+					print "looking for :$alias:\n";
+					$cmd="";
+					foreach my $ff (@favorites) {
+						$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
+						print $2."\n" if defined $2;
+						if (defined $2 && $2 eq $alias) {
+							$cmd=$4 if defined $4;
+					#"-" defined favorite commands that do not require authentification
+							$auth=1 if (defined $3 && $3 eq "-");
+						}
+					}
+					if ($cmd eq "") {
+						Signalbot_sendMessage($hash,$sender,"","favorite '$alias' not defined");
+						Log3 $hash->{NAME}, 4, $hash->{NAME}.": favorite '$alias' not defined";
+					}
+				}
+			} else {
+				$cmd="get $hash->{NAME} favorites";
+			}
+		}
 		return $cmd if $cmd eq "";
-		if ($hash->{helper}{auth}{$sender}==1) {
+		if ($auth) {
 			Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes command $cmd";
 			my $error = AnalyzeCommand($hash, $cmd);
 			if (defined $error) {
@@ -597,6 +667,22 @@ sub Signalbot_authTimeout($@) {
 	my $hash = $defs{$name};
 	$hash->{helper}{auth}{$sender}=0;
 }
+
+#Wrapper around the new MessageReceived callback - currently ignored since V0.10.0 sends both callbacks
+sub Signalbot_MessageReceivedV2 ($@) {
+	my ($hash,$timestamp,$source,$groupID,$message,$extras) = @_;
+	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Message CallbackV2 - ignored";	
+	return;
+	my $att = $extras->{attachments};
+	my @attachments;
+	if (defined $att) {
+		my @arr=@$att;
+		foreach (@arr) {
+			push @attachments, $_->{file};
+		}
+	}
+	Signalbot_MessageReceived($hash,$timestamp,$source,$groupID,$message,\@attachments);
+}	
 
 sub Signalbot_MessageReceived ($@) {
 	my ($hash,$timestamp,$source,$groupID,$message,$attachments) = @_;
@@ -1079,7 +1165,7 @@ sub Signalbot_Read($@){
 			if (defined $callback) {
 				my $b=$msg->get_body();
 				my @body=@$b;
-				if ($callback eq "MessageReceived" || $callback eq "ReceiptReceived" || $callback eq "SyncMessageReceived") {
+				if ($callback eq "MessageReceived" || $callback eq "ReceiptReceived" || $callback eq "SyncMessageReceived" || $callback eq "MessageReceivedV2") {
 					my $func="Signalbot_$callback";
 					Log3 $hash->{NAME}, 5, $hash->{NAME}.": Sync Callback: $callback Args:".join(",",@body);
 					CallFn($hash->{NAME},$callback,$hash,@body);
@@ -1415,9 +1501,12 @@ sub Signalbot_Attr(@) {					#
 	} elsif($attr eq "authDev") {
 	return undef unless (defined $val && $val ne "" && $init_done);
 	my $bhash = $defs{$val};
+	return "Unknown device $val" if !defined $bhash;
 	return "Not a GoogleAuth device $val" unless $bhash->{TYPE} eq "GoogleAuth";
 	return undef;
 	} elsif($attr eq "cmdKeyword") {
+		return undef;
+	} elsif($attr eq "cmdFavorite") {
 		return undef;
 	} elsif($attr eq "babbleDev") {
 		return undef unless (defined $val && $val ne "" && $init_done);
@@ -2026,6 +2115,10 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			Lists all accounts (phone numbers) registered on this computer. Only available when not attached to an account (account=none).
 			Use register or link to create new accounts.<br>
 		</li>
+		<li><b>get favorites</b><br>
+			<a id="Signalbot-get-favorites"></a>
+			Lists the defined favorites in the attribute "favorites" in a readable format<br>
+		</li>
 		<br>
 	</ul>
 
@@ -2072,12 +2165,30 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<a id="Signalbot-attr-babbleExclude"></a>
 			RegExp pattern that, when matched, will exclude messages to be processed by the Babble connection<br>
 		</li>
-		<li><b>commandKeyword</b><br>
-		<a id="Signalbot-attr-commandKeyword"></a>
+		<li><b>cmdKeyword</b><br>
+		<a id="Signalbot-attr-cmdKeyword"></a>
 			One or more characters that mark a message as GoogleAuth protected command which is directly forwarded to FHEM for processing. Example: for "="<br>
 			=123456 set lamp off<br>
 			where "123456" is a GoogleAuth token. The command after the token is optional. After the authentification the user stay for "authTimeout" seconds authentificated and can execute command without token (e.g. "=set lamp on").<br>
 			<b>If the attribute is not defined, no commands can be issued</b>
+		</li>
+		<li><b>cmdFavorite</b><br>
+		<a id="Signalbot-attr-cmdFavorite"></a>
+			One or more characters that mark a message as favorite in GoogleAuth mode.<br>
+			The favorite is either followed by a number or an alias as defined in the "favorite" attribute.<br>
+			Assuming cmdKeyword "=" and cmdFavorite "fav", "=fav 1" will execute the first favorite.<br>
+			Just sending "=fav" will list the available favorites.<br>
+			<b>Note</b>: The cmdFavorite will be checked before an actual command is interpreted. So "set" will be a bad idea since you won't be able to use any "set" command anymore.
+		</li>
+		<li><b>favorites</b><br>
+		<a id="Signalbot-attr-favorites"></a>
+			Semicolon separated list of favorite definitions (see "cmdFavorite"). Favorites are identified either by their ID (defined by their order) or an optional alias in square brackets, preceding the command definition.<br><br>
+			Example: set lamp on;set lamp off;[lamp]set lamp on<br><br>
+			This defines 3 favorites numbered 1 to 3 where the third one can also be accessed with the alias "lamp".<br>
+			Using favorites you can define specific commands that can be executed without GoogleAuth by preceeding the command with a minus "-" sign.<br><br>
+			Example: -set lamp off;[lamp]-set lamp on;set door open<br><br>
+			Both favorites 1 and 2 (or "lamp") can be executed without authentification while facorite 3 requires to be authentificated.<br>
+			You can use "get favorites" to validate your list and identify the correct IDs.<br>
 		</li>
 		<li><b>defaultPeer</b><br>
 		<a id="Signalbot-attr-defaultPeer"></a>

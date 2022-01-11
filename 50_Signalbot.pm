@@ -482,22 +482,20 @@ sub Signalbot_Get($@) {
 		my @fav=split(";",AttrVal($name,"favorites",""));
 		return "No favorites defined" if @fav==0;
 		my $ret="Defined favorites:\n\n";
-		my $format="%2i(%s)%-30s\n";
-		$ret.="ID(Auth)Command[alias]\n";
+		my $format="%2i (%s) %-15s %-50s\n";
+		$ret.="ID (A) Alias           Command\n";
 		my $cnt=1;
 		foreach (@fav) {
 			my $ff=$_;
-			$ff =~ /(\[.*\])?([\-]?)(.*)/;
+			$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
 			my $aa="y";
-			if ($2 eq "-") {
+			if ($3 eq "-") {
 				$aa="n";
 			}
-			$ret.=sprintf($format,$cnt,$aa,$3);
-			if ($1 ne "") {
-				$ret.="     $1\n";
-			}
+			$ret.=sprintf($format,$cnt,$aa,$2,$4);
 			$cnt++;
 		}
+		$ret.="\n(A)=GoogleAuth required to execute command";
 		return $ret;
 	}
 	
@@ -605,9 +603,9 @@ sub Signalbot_command($@){
 		my $fav=AttrVal($hash->{NAME},"cmdFavorite",undef);
 		if (defined $fav && defined $cc[0] && $cc[0] eq $fav) {
 			shift @cc;
+			my @favorites=split(";",AttrVal($hash->{NAME},"favorites",""));
 			if (@cc>0) {
 				Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes favorite command $cc[0]";
-				my @favorites=split(";",AttrVal($hash->{NAME},"favorites",""));
 				if ($cc[0] =~/\d+$/) {
 					#Favorite by index
 					my $fid=$cc[0]-1;
@@ -640,7 +638,19 @@ sub Signalbot_command($@){
 					}
 				}
 			} else {
-				$cmd="get $hash->{NAME} favorites";
+				return "No favorites defined" if @favorites==0;
+				my $ret="Defined favorites:\n\n";
+				my $format="%2i %-30s\n";
+				$ret.="ID Command\n";
+				my $cnt=1;
+				foreach (@favorites) {
+					my $ff=$_;
+					$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
+					$ret.=sprintf($format,$cnt,$4);
+					$cnt++;
+				}
+				Signalbot_sendMessage($hash,$sender,"",$ret);
+				$cmd="";
 			}
 		}
 		return $cmd if $cmd eq "";
@@ -888,6 +898,7 @@ sub Signalbot_setup($@){
 	return undef;
 }
 
+my $Signalbot_Retry=0;
 # After Dbus init successfully came back
 sub Signalbot_setup2($@) {
 	my ($hash) = @_;
@@ -912,12 +923,17 @@ sub Signalbot_setup2($@) {
 	my $account=ReadingsVal($name,"account","none");
 	if (!defined $version) {
 		$hash->{helper}{version}=0; #prevent uninitalized value in case of service not present
+		if ($Signalbot_Retry<3) {
+			$Signalbot_Retry++;
+			InternalTimer(gettimeofday() + 10, 'Signalbot_setup', $hash, 0);
+			Log3 $name, 3, $hash->{NAME}.": Could not init signal-cli - retry $Signalbot_Retry in 10 seconds";
+		}
 		return "Error calling version";
 	}
 	
 	my @ver=split('\.',$version);
-	#to be on the safe side allow 2 digits for lowest version number, so 0.8.0 results to 800
-	$hash->{helper}{version}=$ver[0]*1000+$ver[1]*100+$ver[2];
+	#to be on the safe side allow 2 digits for version number, so 0.8.0 results to 800, 1.10.11 would result in 11011
+	$hash->{helper}{version}=$ver[0]*10000+$ver[1]*100+$ver[2];
 	$hash->{VERSION}="Signalbot:".$Signalbot_VERSION." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
 	$hash->{model}=Signalbot_OSRel();
 	if($hash->{helper}{version}>800) {
@@ -1729,22 +1745,22 @@ sub Signalbot_Detail {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}
 	my $multi=$hash->{helper}{multi};
+	my $version=$hash->{helper}{version};
+	$version=0 if !defined $version;
 	$multi=0 if !defined $multi;
-	if($hash->{helper}{version}<900) {
+	if($version<900) {
 		$ret .= "<b>signal-cli v0.9.0+ required.</b><br>Please use installer to install or update<br>";
-		$ret .= "Note: The installer only supports Debian based Linux distributions like Ubuntu and Raspberry OS<br>";
+		$ret .= "<b>Note:</b> The installer only supports Debian based Linux distributions like Ubuntu and Raspberry OS<br>";
 		$ret .= "      and X86 or armv7l CPUs<br>";
 	}
-	if($hash->{helper}{version}==901) {
+	if($version==901) {
 		$ret .= "<b>Warning: signal-cli v0.9.1 has issues affecting Signalbot.</b><br>Please use installer to downgrade to 0.9.0<br>";
 	}
-	if ($multi==0) {
+	if ($multi==0 && $version>0) {
 		$ret .= "Signal-cli is running in single-mode, please consider starting it without -u parameter (e.g. by re-running the installer)<br>";
 	}
-	if($hash->{helper}{version}<900 || $multi==0) {
-		$ret .= 'You can download the installer <a href="www/signal/signal_install.sh" download>here</a> or your www/signal directory and run it with<br><b>sudo ./signal_install.sh</b><br><br>';
-		$ret .= "Alternatively go to <a href=https://svn.fhem.de/fhem/trunk/fhem/thirdparty/signal-cli-packages>FHEM SVN thirdparty</a> and download the matching Debian package<br>";
-		$ret .= "Install with e.g. <b>sudo apt install ./signal-cli-dbus_0.9.0-1_buster_armhf.deb</b> (./ is important to tell apt this is a file)<br><br>";
+	if($version<900 || $multi==0) {
+		$ret .= '<br>You can download the installer <a href="www/signal/signal_install.sh" download>here</a> or your www/signal directory and run it with<br><b>sudo ./signal_install.sh</b><br><br>';
 	}
 	return $ret if ($hash->{helper}{version}<900);
 	

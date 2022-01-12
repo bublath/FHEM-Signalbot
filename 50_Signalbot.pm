@@ -492,7 +492,9 @@ sub Signalbot_Get($@) {
 			if ($3 eq "-") {
 				$aa="n";
 			}
-			$ret.=sprintf($format,$cnt,$aa,$2,$4);
+			my $alias=$2;
+			$alias="" if !defined $2;
+			$ret.=sprintf($format,$cnt,$aa,$alias,$4);
 			$cnt++;
 		}
 		$ret.="\n(A)=GoogleAuth required to execute command";
@@ -613,6 +615,8 @@ sub Signalbot_command($@){
 						$cmd=$favorites[$fid];
 						$cmd =~ /(\[.*\])?([\-]?)(.*)/;
 						$cmd=$3 if defined $3;
+						#"-" defined favorite commands that do not require authentification
+						$auth=1 if (defined $2 && $2 eq "-");
 						Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender requests favorite command:$cmd";
 					} else {
 						$cmd="";
@@ -621,11 +625,9 @@ sub Signalbot_command($@){
 					}
 				} else {
 					my $alias=join(" ",@cc);
-					print "looking for :$alias:\n";
 					$cmd="";
 					foreach my $ff (@favorites) {
 						$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
-						print $2."\n" if defined $2;
 						if (defined $2 && $2 eq $alias) {
 							$cmd=$4 if defined $4;
 					#"-" defined favorite commands that do not require authentification
@@ -649,7 +651,7 @@ sub Signalbot_command($@){
 					$ret.=sprintf($format,$cnt,$4);
 					$cnt++;
 				}
-				Signalbot_sendMessage($hash,$sender,"",$ret);
+				Signalbot_sendMessage($hash,$sender,"",$ret) if $auth;
 				$cmd="";
 			}
 		}

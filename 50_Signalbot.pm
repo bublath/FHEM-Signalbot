@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.3";
+my $Signalbot_VERSION="3.4";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -479,7 +479,9 @@ sub Signalbot_Get($@) {
 		}
 		return $ret;
 	} elsif ($cmd eq "favorites") {
-		my @fav=split(";",AttrVal($name,"favorites",""));
+		my $favs = AttrVal($name,"favorites","");
+		$favs =~ s/;;/##/g;
+		my @fav=split(";",$favs);
 		return "No favorites defined" if @fav==0;
 		my $ret="Defined favorites:\n\n";
 		my $format="%2i (%s) %-15s %-50s\n";
@@ -494,7 +496,9 @@ sub Signalbot_Get($@) {
 			}
 			my $alias=$2;
 			$alias="" if !defined $2;
-			$ret.=sprintf($format,$cnt,$aa,$alias,$4);
+			my $favs=$4;
+			$favs =~ s/##/;;/g;
+			$ret.=sprintf($format,$cnt,$aa,$alias,$favs);
 			$cnt++;
 		}
 		$ret.="\n(A)=GoogleAuth required to execute command";
@@ -567,16 +571,19 @@ sub Signalbot_command($@){
 	my ($hash, $sender, $message) = @_;
 	
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Check Command $sender $message";
-	my $timeout=AttrVal($hash->{NAME},"authTimeout",0);
+	my $timeout=AttrVal($hash->{NAME},"authTimeout",300);
 	return $message if $timeout==0;
-	my $device=AttrVal($hash->{NAME},"authDev",undef);
-	return $message unless defined $device;
 	my $cmd=AttrVal($hash->{NAME},"cmdKeyword",undef);
 	return $message unless defined $cmd;
 	my @arr=();
 	if ($message =~ /^$cmd(.*)/) {
 		$cmd=$1;
 		Log3 $hash->{NAME}, 5, $hash->{NAME}.": Command received:$cmd";
+		my $device=AttrVal($hash->{NAME},"authDev",undef);
+		if (!defined $device) {
+			readingsSingleUpdate($hash, 'lastError', "Missing GoogleAuth device in authDev to execute remote command",1);
+			return $message;
+		}
 		my @cc=split(" ",$cmd);
 		if ($cc[0] =~ /\d+$/) {
 			#This could be a token
@@ -592,9 +599,10 @@ sub Signalbot_command($@){
 				Signalbot_sendMessage($hash,$sender,"","You have control for ".$timeout."s");
 				$cmd=$restcmd;
 			} else {
-				Log3 $hash->{NAME}, 3, $hash->{NAME}.": Invalid token for sender $sender";
+				Log3 $hash->{NAME}, 3, $hash->{NAME}.": Invalid token sent by $sender";
 				$hash->{helper}{auth}{$sender}=0;
 				Signalbot_sendMessage($hash,$sender,"","Invalid token");
+				Log3 $hash->{NAME}, 2, $hash->{NAME}.": Invalid token sent by $sender:$message";
 				return $cmd;
 			}
 		}
@@ -605,7 +613,9 @@ sub Signalbot_command($@){
 		my $fav=AttrVal($hash->{NAME},"cmdFavorite",undef);
 		if (defined $fav && defined $cc[0] && $cc[0] eq $fav) {
 			shift @cc;
-			my @favorites=split(";",AttrVal($hash->{NAME},"favorites",""));
+			my $fav=AttrVal($hash->{NAME},"favorites","");
+			$fav =~ s/;;/##/g;
+			my @favorites=split(";",$fav);
 			if (@cc>0) {
 				Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes favorite command $cc[0]";
 				if ($cc[0] =~/\d+$/) {
@@ -648,7 +658,9 @@ sub Signalbot_command($@){
 				foreach (@favorites) {
 					my $ff=$_;
 					$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
-					$ret.=sprintf($format,$cnt,$4);
+					my $fav=$4;
+					$fav =~ s/##/;;/g;
+					$ret.=sprintf($format,$cnt,$fav);
 					$cnt++;
 				}
 				Signalbot_sendMessage($hash,$sender,"",$ret) if $auth;
@@ -658,13 +670,24 @@ sub Signalbot_command($@){
 		return $cmd if $cmd eq "";
 		if ($auth) {
 			Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes command $cmd";
-			my $error = AnalyzeCommand($hash, $cmd);
+			$cmd =~ s/##/;/g;
+			my %dummy; 
+			my ($err, @a) = ReplaceSetMagic(\%dummy, 0, ( $cmd ) );
+			if ( $err ) {
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd failed on ReplaceSetmagic with :$err: on  :$cmd:";
+			} else {
+			$cmd = join(" ", @a);
+				Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd returned :$cmd:";
+			}
+			my $error = AnalyzeCommandChain($hash, $cmd);
 			if (defined $error) {
 				Signalbot_sendMessage($hash,$sender,"",$error);
 			} else {
 				Signalbot_sendMessage($hash,$sender,"","Done");
 			}
 		} else {
+			readingsSingleUpdate($hash, 'lastError', "Unauthorized command request by $sender:$message",1);
+			Log3 $hash->{NAME}, 2, $hash->{NAME}.": Unauthorized command request by $sender:$message";
 			Signalbot_sendMessage($hash,$sender,"","You are not authorized to execute commands");
 		}
 		return $cmd;
@@ -800,7 +823,8 @@ sub Signalbot_MessageReceived ($@) {
 		}
 		Log3 $hash->{NAME}, 4, $hash->{NAME}.": Message from $sender : $message processed";
 	} else {
-		Log3 $hash->{NAME}, 4, $hash->{NAME}.": Message from $sender : $message ignored due to allowedPeer";
+		Log3 $hash->{NAME}, 2, $hash->{NAME}.": Ignored message due to allowedPeer by $source:$message";
+		readingsSingleUpdate($hash, 'lastError', "Ignored message due to allowedPeer by $source:$message",1);
 	}
 }
 
@@ -1504,7 +1528,7 @@ sub Signalbot_Attr(@) {					#
 		}
 	}
 	return undef;
-	} elsif($attr eq "authTimeout") {
+	} elsif($attr eq "authTimeout" || $attr eq "cmdKeyword") {
 	#Take over as is
 	my $aDevice=AttrVal($hash->{NAME},"authDev",undef);
 	if (!defined $aDevice && $init_done) {
@@ -1522,8 +1546,6 @@ sub Signalbot_Attr(@) {					#
 	return "Unknown device $val" if !defined $bhash;
 	return "Not a GoogleAuth device $val" unless $bhash->{TYPE} eq "GoogleAuth";
 	return undef;
-	} elsif($attr eq "cmdKeyword") {
-		return undef;
 	} elsif($attr eq "cmdFavorite") {
 		return undef;
 	} elsif($attr eq "babbleDev") {
@@ -1679,11 +1701,11 @@ sub Signalbot_Notify($$) {
 ################################### 
 sub Signalbot_Define($$) {			#
 	my ($hash, $def) = @_;
-	Log3 $hash->{NAME}, 1, $hash->{NAME}." Define: $def";
+	Log3 $hash->{NAME}, 2, $hash->{NAME}." Define: $def";
 	
 	$hash->{NOTIFYDEV} = "global";
 		if ($init_done) {
-			Log3 $hash->{NAME}, 1, "Define init_done: $def";
+			Log3 $hash->{NAME}, 2, "Define init_done: $def";
 			my $ret=Signalbot_Init( $hash, $def );
 			return $ret if $ret;
 	}
@@ -1695,7 +1717,7 @@ sub Signalbot_Init($$) {				#
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Init: $args";
 	if (defined $DBus_missing) {
 		$hash->{STATE} ="Please make sure that Protocol::DBus is installed, e.g. by 'sudo cpan install Protocol::DBus'";
-		Log3 $hash->{NAME}, 1, $hash->{NAME}.": Init: $hash->{STATE}";
+		Log3 $hash->{NAME}, 2, $hash->{NAME}.": Init: $hash->{STATE}";
 		return $hash->{STATE};
 	}
 	Log3 $hash->{NAME}, 4, $hash->{NAME}.": Protocol::DBus version found ".$Protocol::DBus::VERSION;
@@ -2152,11 +2174,11 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<li><b>authTimeout</b><br>
 		<a id="Signalbot-attr-authTimeout"></a>
 			The number of seconds after which a user authentificated for command access stays authentifcated.<br>
-			Default: -, valid values: decimal number<br>
+			Default: 300, valid values: decimal number<br>
 		</li>
 		<li><b>authDev</b><br>
 		<a id="Signalbot-attr-authDev"></a>
-			Name of GoogleAuth device. Will normally be automatically filled when setting an authTimeout if a GoogleAuth device is already existing.<br>
+			Name of GoogleAuth device. Will normally be automatically filled when setting an authTimeout or cmdKeyword if a GoogleAuth device is already existing.<br>
 		</li>
 		<li><b>autoJoin no|yes</b><br>
 		<a id="Signalbot-attr-autoJoin"></a>

@@ -656,20 +656,22 @@ sub Signalbot_command($@){
 			} else {
 				my $ret="Defined favorites:\n\n";
 				my $format="%2i %-30s\n";
-				$ret.="ID Command\n";
+				$ret.="ID [Alias] Command\n";
 				my $cnt=1;
 				foreach (@favorites) {
 					my $ff=$_;
 					$ff =~ /(^\[(.*?)\])?([\-]?)(.*)/;
 					my $fav=$4;
 					$fav =~ s/##/;;/g;
+					$fav=substr($fav,0,18)."..." if length($fav)>18;
+					$fav=$1." ".$fav if defined $1;
 					$ret.=sprintf($format,$cnt,$fav);
 					$cnt++;
 				}
 				$ret="No favorites defined" if @favorites==0;
 				if ($auth || $authList eq "-") {
 					Signalbot_sendMessage($hash,$sender,"",$ret);
-					return $ret;
+					return $cmd;
 				}
 				$cmd="";
 			}

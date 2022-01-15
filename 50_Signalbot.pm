@@ -611,6 +611,7 @@ sub Signalbot_command($@){
 			$auth=1;
 		}
 		my $fav=AttrVal($hash->{NAME},"cmdFavorite",undef);
+		my $error="";
 		if (defined $fav && defined $cc[0] && $cc[0] eq $fav) {
 			shift @cc;
 			my $fav=AttrVal($hash->{NAME},"favorites","");
@@ -630,8 +631,7 @@ sub Signalbot_command($@){
 						Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender requests favorite command:$cmd";
 					} else {
 						$cmd="";
-						Signalbot_sendMessage($hash,$sender,"","favorite #$cc[0] not defined");
-						Log3 $hash->{NAME}, 4, $hash->{NAME}.": favorite #$cc[0] not defined";
+						$error="favorite #$cc[0] not defined";
 					}
 				} else {
 					my $alias=join(" ",@cc);
@@ -645,12 +645,10 @@ sub Signalbot_command($@){
 						}
 					}
 					if ($cmd eq "") {
-						Signalbot_sendMessage($hash,$sender,"","favorite '$alias' not defined");
-						Log3 $hash->{NAME}, 4, $hash->{NAME}.": favorite '$alias' not defined";
+						$error="favorite '$alias' not defined";
 					}
 				}
 			} else {
-				return "No favorites defined" if @favorites==0;
 				my $ret="Defined favorites:\n\n";
 				my $format="%2i %-30s\n";
 				$ret.="ID Command\n";
@@ -663,34 +661,42 @@ sub Signalbot_command($@){
 					$ret.=sprintf($format,$cnt,$fav);
 					$cnt++;
 				}
+				$ret="No favorites defined" if @favorites==0;
 				Signalbot_sendMessage($hash,$sender,"",$ret) if $auth;
 				$cmd="";
 			}
 		}
-		return $cmd if $cmd eq "";
-		if ($auth) {
-			Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes command $cmd";
-			$cmd =~ s/##/;/g;
-			my %dummy; 
-			my ($err, @a) = ReplaceSetMagic(\%dummy, 0, ( $cmd ) );
-			if ( $err ) {
-				Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd failed on ReplaceSetmagic with :$err: on  :$cmd:";
-			} else {
-			$cmd = join(" ", @a);
-				Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd returned :$cmd:";
-			}
-			my $error = AnalyzeCommandChain($hash, $cmd);
-			if (defined $error) {
-				Signalbot_sendMessage($hash,$sender,"",$error);
-			} else {
-				Signalbot_sendMessage($hash,$sender,"","Done");
-			}
-		} else {
+		# Always return the same message if not authorized
+		if (!$auth) {
 			readingsSingleUpdate($hash, 'lastError', "Unauthorized command request by $sender:$message",1);
 			Log3 $hash->{NAME}, 2, $hash->{NAME}.": Unauthorized command request by $sender:$message";
 			Signalbot_sendMessage($hash,$sender,"","You are not authorized to execute commands");
+			return $cmd;
 		}
-		return $cmd;
+		# If authorized return errors via Signal and Logfile
+		if ($error ne "") {
+			Signalbot_sendMessage($hash,$sender,"",$error);
+			#Log3 $hash->{NAME}, 4, $hash->{NAME}.": $error";
+		}
+		return $cmd if $cmd eq "";
+
+		Log3 $hash->{NAME}, 4, $hash->{NAME}.": $sender executes command $cmd";
+		$cmd =~ s/##/;/g;
+		my %dummy; 
+		my ($err, @a) = ReplaceSetMagic(\%dummy, 0, ( $cmd ) );
+		if ( $err ) {
+			Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd failed on ReplaceSetmagic with :$err: on  :$cmd:";
+		} else {
+		$cmd = join(" ", @a);
+			Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd returned :$cmd:";
+		}
+		my $error = AnalyzeCommandChain($hash, $cmd);
+		if (defined $error) {
+			Signalbot_sendMessage($hash,$sender,"",$error);
+		} else {
+			Signalbot_sendMessage($hash,$sender,"","Done");
+		}
+		return $cmd; #so msgText gets logged without the cmdKeyword and actual command after favorite replacement
 	}
    return $message;
 }

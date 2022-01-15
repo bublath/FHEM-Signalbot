@@ -490,7 +490,7 @@ sub Signalbot_Get($@) {
 		my $cnt=1;
 		foreach (@fav) {
 			my $ff=$_;
-			$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
+			$ff =~ /(^\[(.*?)\])?([\-]?)(.*)/;
 			my $aa="y";
 			if ($3 eq "-") {
 				$aa="n";
@@ -612,6 +612,9 @@ sub Signalbot_command($@){
 			$auth=1;
 		}
 		my $fav=AttrVal($hash->{NAME},"cmdFavorite",undef);
+		$fav =~ /^(-?)(.*)/;
+		my $authList=$1;
+		$fav = $2;
 		my $error="";
 		if (defined $fav && defined $cc[0] && $cc[0] eq $fav) {
 			shift @cc;
@@ -626,7 +629,7 @@ sub Signalbot_command($@){
 					my $fid=$cc[0]-1;
 					if ($fid<@favorites) {
 						$cmd=$favorites[$fid];
-						$cmd =~ /(\[.*\])?([\-]?)(.*)/;
+						$cmd =~ /(^\[.*?\])?([\-]?)(.*)/;
 						$cmd=$3 if defined $3;
 						#"-" defined favorite commands that do not require authentification
 						$auth=1 if (defined $2 && $2 eq "-");
@@ -639,7 +642,7 @@ sub Signalbot_command($@){
 					my $alias=join(" ",@cc);
 					$cmd="";
 					foreach my $ff (@favorites) {
-						$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
+						$ff =~ /(^\[(.*?)\])?([\-]?)(.*)/;
 						if (defined $2 && $2 eq $alias) {
 							$cmd=$4 if defined $4;
 					#"-" defined favorite commands that do not require authentification
@@ -657,14 +660,17 @@ sub Signalbot_command($@){
 				my $cnt=1;
 				foreach (@favorites) {
 					my $ff=$_;
-					$ff =~ /(\[(.*)\])?([\-]?)(.*)/;
+					$ff =~ /(^\[(.*?)\])?([\-]?)(.*)/;
 					my $fav=$4;
 					$fav =~ s/##/;;/g;
 					$ret.=sprintf($format,$cnt,$fav);
 					$cnt++;
 				}
 				$ret="No favorites defined" if @favorites==0;
-				Signalbot_sendMessage($hash,$sender,"",$ret) if $auth;
+				if ($auth || $authList eq "-") {
+					Signalbot_sendMessage($hash,$sender,"",$ret);
+					return $ret;
+				}
 				$cmd="";
 			}
 		}
@@ -692,7 +698,15 @@ sub Signalbot_command($@){
 		$cmd = join(" ", @a);
 			Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd returned :$cmd:";
 		}
-		my $error = AnalyzeCommandChain($hash, $cmd);
+		if ($cmd =~ /^print (.*)/) {
+			$error=decode_utf8("$1");
+			$cmd="";
+		}
+		elsif ($cmd =~ /{(.*)}/) {
+			$error = AnalyzePerlCommand($hash, $1);
+		} else {
+			$error = AnalyzeCommandChain($hash, $cmd);
+		}
 		if (defined $error) {
 			Signalbot_sendMessage($hash,$sender,"",$error);
 		} else {
@@ -1097,7 +1111,10 @@ sub Signalbot_CallS($@) {
 		$got_response = 1;
 		} 
 	) -> catch ( sub () {
-		Log3 $hash->{NAME}, 4, $hash->{NAME}.": Sync Error for: $function";
+		#Ignore this error in Log for isRegistered since it is expected and confuses users
+		if ($function ne "isRegistered") {
+			Log3 $hash->{NAME}, 4, $hash->{NAME}.": Sync Error for: $function";
+		}
 		my $msg = shift;
 		if (!defined $msg) {
 			readingsSingleUpdate($hash, 'lastError', "Fatal Error in $function: empty message",1);

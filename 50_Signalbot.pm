@@ -128,7 +128,7 @@ sub Signalbot_Initialize($) {
 												"authDev ".
 												"cmdKeyword ".
 												"cmdFavorite ".
-												"favorites ".
+												"favorites:textField-long ".
 												"autoJoin:yes,no ".
 												"registerMethod:SMS,Voice ".
 												"$readingFnAttributes";
@@ -480,6 +480,7 @@ sub Signalbot_Get($@) {
 		return $ret;
 	} elsif ($cmd eq "favorites") {
 		my $favs = AttrVal($name,"favorites","");
+		$favs =~ s/[\n\r]//g;
 		$favs =~ s/;;/##/g;
 		my @fav=split(";",$favs);
 		return "No favorites defined" if @fav==0;
@@ -615,6 +616,7 @@ sub Signalbot_command($@){
 		if (defined $fav && defined $cc[0] && $cc[0] eq $fav) {
 			shift @cc;
 			my $fav=AttrVal($hash->{NAME},"favorites","");
+			$fav =~ s/[\n\r]//g;
 			$fav =~ s/;;/##/g;
 			my @favorites=split(";",$fav);
 			if (@cc>0) {

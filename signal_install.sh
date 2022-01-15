@@ -1,13 +1,13 @@
 #!/bin/bash
 #$Id:$
-SCRIPTVERSION="3.2"
+SCRIPTVERSION="3.3"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.10.0"
+SIGNALVERSION="0.9.2"
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -17,7 +17,13 @@ TMPFILE=/tmp/signal$$.tmp
 VIEWER=eog
 DBVER=0.19
 OPERATION=$1
-JAVA_VERSION=17.0
+JAVA_VERSION=11.0
+
+if [ $OPERATION = "experimental" ]; then
+  SIGNALVERSION="0.10.0"
+  JAVA_VERSION=17.0
+  OPERATION=
+fi
 
 #Make sure picture viewer exists
 VIEWER=`which $VIEWER`
@@ -621,6 +627,35 @@ if [ $OPERATION = "remove" ]; then
 fi
 
 if [ $OPERATION = "start" ]; then
+	start_service
+fi
+
+if [ $OPERATION = "backup" ]; then
+	echo "Creating backup of all configuration files"
+	stop_service
+	rm signal-backup.tar.gz
+	tar czPf signal-backup.tar.gz $SIGNALVAR $DBSYSTEMD/org.asamk.Signal.conf  $DBSYSTEMS/org.asamk.Signal.service $SYSTEMD/signal.service
+	start_service
+	ls -l signal-backup.tar.gz
+fi
+
+if [ $OPERATION = "restore" ]; then
+	if ! [ -e signal-backup.tar.gz ]; then
+		echo "Make sure signal-backup.tar.gz is in current directory"
+		exit
+	fi
+	echo "Are you sure you want to restore all signal-cli configuration files?"
+	echo -n "Any existing configuration will be lost (y/N)? "
+	read REPLY
+	if ! [ "$REPLY" = "y" ]; then
+		echo "Aborting..."
+		exit
+	fi
+	stop_service
+	echo -n "Restoring backup..."
+	tar xPf signal-backup.tar.gz
+	chown -R $SIGNALUSER: $SIGNALVAR
+	echo "done"
 	start_service
 fi
 

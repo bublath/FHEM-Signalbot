@@ -50,6 +50,10 @@ eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
 	"version" 				=> "",
 	"isMember"				=> "ay",
 	"getSelfNumber"			=> "", #V0.9.1
+	"deleteContact"			=> "s", #V0.10.0
+	"deleteRecipient"		=> "s", #V0.10.0
+	"setPin"				=> "s", #V0.10.0
+	"removePin"				=> "", #V0.10.0
 	"sendEndSessionMessage" => "as",		#unused
 	"sendRemoteDeleteMessage" => "xas",		#unused
 	"sendGroupRemoteDeletemessage" => "xay",#unused
@@ -130,6 +134,7 @@ sub Signalbot_Set($@) {					#
 				"quitGroup:textField ".
 				"joinGroup:textField ".
 				"updateProfile:textField ";
+	$sets.=		"deleteContact:textField " if $version >=1000;
 	my $sets_reg=	"link:noArg ".
 					"register:textField ".
 					"captcha:textField ".
@@ -250,6 +255,16 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
+	} elsif ( $cmd eq "deleteContact") {
+		return "Usage: set ".$hash->{NAME}." deleteContact <number|name>" if (@args<1);
+		return "signal-cli 0.10.0+ required" if $version<1000;
+		my $nickname = join (" ",@args);
+		my $number=Signalbot_translateContact($hash,$nickname);
+		return "Unknown contact" if !defined $number;
+		delete $hash->{helper}{contacts}{$number} if defined $hash->{helper}{contacts}{$number};
+		#Signalbot_CallS($hash,"deleteContact",$number);
+		my $ret=Signalbot_CallS($hash,"deleteRecipient",$number);
+		return; #$ret;
 	} elsif ( $cmd eq "createGroup") {
 		if (@args<1 || @args>2 ) {
 			return "Usage: set ".$hash->{NAME}." createGroup <group name> &[path to thumbnail]";
@@ -279,7 +294,7 @@ sub Signalbot_Set($@) {					#
 		if (@args!=1) {
 			return "Usage: set ".$hash->{NAME}." ".$cmd." <group link>";
 		}
-		return Signalbot_join($hash,$args[0]);
+		return Signalbot_Call($hash,"joinGroup",$args[0]);
 	} elsif ( $cmd eq "block" || $cmd eq "unblock") {
 		if (@args!=1) {
 			return "Usage: set ".$hash->{NAME}." ".$cmd." <group name>|<contact>";
@@ -742,7 +757,7 @@ sub Signalbot_MessageReceived ($@) {
 	my $join=AttrVal($hash->{NAME},"autoJoin","no");
 	if ($join eq "yes") {
 		if ($message =~ /^https:\/\/signal.group\//) {
-			return Signalbot_join($hash,$message);
+			return Signalbot_Call($hash,"joinGroup",$message);
 		}
 	}
 	
@@ -934,7 +949,6 @@ sub Signalbot_setup2($@) {
 	my $version=Signalbot_CallS($hash,"version");
 	my $account=ReadingsVal($name,"account","none");
 	if (!defined $version) {
-		$hash->{helper}{version}=0; #prevent uninitalized value in case of service not present
 		if ($Signalbot_Retry<3) {
 			$Signalbot_Retry++;
 			InternalTimer(gettimeofday() + 10, 'Signalbot_setup', $hash, 0);
@@ -966,6 +980,10 @@ sub Signalbot_setup2($@) {
 			$account=$numlist[0];
 		}
 		$hash->{helper}{multi}=1;
+	}
+	if ($account ne "none") {
+		my $name=Signalbot_CallS($hash,"getContactName",$account);
+		readingsSingleUpdate($hash, 'accountName', $name, 0) if defined $name;
 	}
 	
 	#Initialize Signal listener only at the very end to make sure correct $signalpath is used
@@ -1269,15 +1287,6 @@ sub Signalbot_updateProfile($@) {
 	Signalbot_Call($hash,"updateProfile",$newname,"","",$avatar,0);
 }
 
-sub Signalbot_join($@) {
-	my ( $hash,$grouplink) = @_;
-	my $version = $hash->{helper}{version};
-	if ($version<=800) {
-		return "Joining groups requires signal-cli 0.8.1 or higher";
-	}
-	Signalbot_Call($hash,"joinGroup",$grouplink);
-}
-
 sub Signalbot_invite($@) {
 	my ( $hash,$groupname,@contacts) = @_;
 
@@ -1390,17 +1399,15 @@ sub Signalbot_refreshGroups($@) {
 		my $groupid = join(" ",@group);
 		$hash->{helper}{groups}{$groupid}{name}=$groupname;	
 		Log3 $hash->{NAME}, 5, "found group ".$groupname; 
-		if($hash->{helper}{version}>800) {
-			my $active = Signalbot_CallS($hash,"isMember",\@group);
-			$hash->{helper}{groups}{$groupid}{active}=$active;
-			my $blocked = Signalbot_CallS($hash,"isGroupBlocked",\@group);
-			$hash->{helper}{groups}{$groupid}{blocked}=$blocked;
-			if ($blocked==1) {
-				$groupname="(".$groupname.")";
-			}
-			if ($active==1) {
-				push @grouplist,$groupname;
-			}
+		my $active = Signalbot_CallS($hash,"isMember",\@group);
+		$hash->{helper}{groups}{$groupid}{active}=$active;
+		my $blocked = Signalbot_CallS($hash,"isGroupBlocked",\@group);
+		$hash->{helper}{groups}{$groupid}{blocked}=$blocked;
+		if ($blocked==1) {
+			$groupname="(".$groupname.")";
+		}
+		if ($active==1) {
+			push @grouplist,$groupname;
 		}
 	}
 	readingsSingleUpdate($hash, 'joinedGroups', join(",",@grouplist),1);
@@ -1575,8 +1582,8 @@ sub Signalbot_getAccounts($) {
 }
 
 sub Signalbot_setAccount($$) {
-	my ($hash,$account) = @_;
-	$account = Signalbot_checkNumber($account);
+	my ($hash,$number) = @_;
+	my $account = Signalbot_checkNumber($number);
 	return "Account needs to start with '+' followed by digits" if !defined $account;
 	my $num=Signalbot_CallS($hash,"listAccounts");
 	return "Error in listAccounts" if !defined $num;
@@ -1692,6 +1699,7 @@ sub Signalbot_Define($$) {			#
 ################################### 
 sub Signalbot_Init($$) {				#
 	my ( $hash, $args ) = @_;
+	$hash->{helper}{version}=0;
 	Log3 $hash->{NAME}, 5, $hash->{NAME}.": Init: $args";
 	if (defined $DBus_missing) {
 		$hash->{STATE} ="Please make sure that Protocol::DBus is installed, e.g. by 'sudo cpan install Protocol::DBus'";
@@ -1748,7 +1756,6 @@ sub Signalbot_Detail {
 	}
 	my $multi=$hash->{helper}{multi};
 	my $version=$hash->{helper}{version};
-	$version=0 if !defined $version;
 	$multi=0 if !defined $multi;
 	if($version<900) {
 		$ret .= "<b>signal-cli v0.9.0+ required.</b><br>Please use installer to install or update<br>";

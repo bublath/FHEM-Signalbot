@@ -20,7 +20,7 @@ OPERATION=$1
 JAVA_VERSION=11.0
 
 if [ $OPERATION = "experimental" ]; then
-  SIGNALVERSION="0.10.0"
+  SIGNALVERSION="0.10.1"
   JAVA_VERSION=17.0
   OPERATION=
 fi
@@ -157,7 +157,7 @@ fi
 GLIBC=`ldd --version |  grep -m1 -o '[0-9]\.[0-9][0-9]' | head -n 1`
 
 IDENTSTR=$ARCH-glibc$GLIBC-$SIGNALVERSION
-KNOWN=("amd64-glibc2.27-0.9.0" "amd64-glibc2.28-0.9.0" "amd64-glibc2.31-0.9.0" "armhf-glibc2.28-0.9.0" "amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "armhf-glibc2.28-0.9.2" "armhf-glibc2.31-0.9.2" "armhf-glibc2.31-0.10.0")
+KNOWN=("amd64-glibc2.27-0.9.0" "amd64-glibc2.28-0.9.0" "amd64-glibc2.31-0.9.0" "armhf-glibc2.28-0.9.0" "amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "armhf-glibc2.28-0.9.2" "armhf-glibc2.31-0.9.2" "armhf-glibc2.31-0.10.1")
 
 GETLIBS=1
 if [[ ! " ${KNOWN[*]} " =~ " ${IDENTSTR} " ]]; then

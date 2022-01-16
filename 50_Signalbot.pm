@@ -119,6 +119,7 @@ sub Signalbot_Set($@) {					#
 	my @accounts;
 	@accounts =@{$hash->{helper}{accountlist}} if defined $hash->{helper}{accountlist};
 	my $sets=	"send:textField ".
+				"reply:textField ".
 				"reinit:noArg ".
 				"contact:textField ".
 				"createGroup:textField ".
@@ -135,7 +136,7 @@ sub Signalbot_Set($@) {					#
 					"verify:textField ";
 					
 	
-	$sets.=$sets_reg if $multi==1;
+	$sets.=$sets_reg if defined $multi && $multi==1;
 	$sets=$sets_reg if $account eq "none";
 	$sets.="signalAccount:".join(",",@accounts) if @accounts>0; 
 	
@@ -305,7 +306,7 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
-	} elsif ( $cmd eq "send") {
+	} elsif ( $cmd eq "send" || $cmd eq "reply") {
 		return "Usage: set ".$hash->{NAME}." send [@<Recipient1> ... @<RecipientN>] [#<GroupId1> ... #<GroupIdN>] [&<Attachment1> ... &<AttachmentN>] [<Text>]" if ( @args==0); 
 
 		my @recipients = ();
@@ -343,6 +344,16 @@ sub Signalbot_Set($@) {					#
 
 		}
 		my $defaultPeer=AttrVal($hash->{NAME},"defaultPeer",undef);
+		if ($cmd eq "reply") {
+			my $lastSender=ReadingsVal($hash->{NAME},"msgGroupName","");
+			if ($lastSender ne "") {
+				$lastSender="#".$lastSender;
+			} else {
+				$lastSender=ReadingsVal($hash->{NAME},"msgSender","");
+			}
+			$defaultPeer=$lastSender if $lastSender ne "";
+			Log3 $hash->{NAME}, 4 , $hash->{NAME}.": Reply mode to $defaultPeer";
+		}
 		return "Not enough arguments. Specify a Recipient, a GroupId or set the defaultPeer attribute" if( (@recipients==0) && (@groups==0) && (!defined $defaultPeer) );
 
 		#Check for embedded fhem/perl commands

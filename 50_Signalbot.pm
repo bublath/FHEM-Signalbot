@@ -124,7 +124,6 @@ sub Signalbot_Set($@) {					#
 	@accounts =@{$hash->{helper}{accountlist}} if defined $hash->{helper}{accountlist};
 	my $sets=	"send:textField ".
 				"reply:textField ".
-				"reinit:noArg ".
 				"contact:textField ".
 				"createGroup:textField ".
 				"invite:textField ".
@@ -143,7 +142,8 @@ sub Signalbot_Set($@) {					#
 	
 	$sets.=$sets_reg if defined $multi && $multi==1;
 	$sets=$sets_reg if $account eq "none";
-	$sets.="signalAccount:".join(",",@accounts) if @accounts>0; 
+	$sets.="signalAccount:".join(",",@accounts)." " if @accounts>0; 
+	$sets.="reinit:noArg ";
 	
 	if ( $cmd eq "?" ) {
 		return "Signalbot_Set: Unknown argument $cmd, choose one of " . $sets;
@@ -974,6 +974,11 @@ sub Signalbot_setup2($@) {
 		$hash->{helper}{multi}=0;
 	} else {
 		my @numlist=@{$hash->{helper}{accountlist}};
+		if (@numlist == 0 && $account ne "none") {
+			#Reset account if there are no accounts but FHEM has one set
+			Signalbot_setPath($hash,undef);
+			return;
+		}
 		#Only one number existing - choose automatically if not already set)
 		if(@numlist == 1 && $account eq "none") {
 			Signalbot_setAccount($hash,$numlist[0]);
@@ -1838,7 +1843,8 @@ sub Signalbot_Detail {
 		$ret .= "</td>";
 		$ret .= "<td><br>&nbsp;Scan this QR code to link FHEM to your existing Signal device<\/td>";
 		$ret .= "</tr>";
-		$ret .= "</table>";
+		$ret .= "</table><br>After successfully scanning and accepting the QR code on your phone, wait ~1min to let signal-cli sync and then execute <b>set reinit</b><br>";
+		$ret .= "If you already have other accounts active, you might additionally have to do a <b>set signalAccount<br></b>"
 	}
 	return if ($ret eq ""); #Avoid strange empty line if nothing is printed
 	return $ret;

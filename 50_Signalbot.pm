@@ -564,7 +564,7 @@ sub Signalbot_command($@){
 			return $message;
 		}
 		my @cc=split(" ",$cmd);
-		if ($cc[0] =~ /\d+$/) {
+		if ($cc[0] =~ /^\d+$/) {
 			#This could be a token
 			my $token=shift @cc;
 			my $restcmd=join(" ",@cc);
@@ -679,7 +679,7 @@ sub Signalbot_command($@){
 			Log3 $hash->{NAME}, 4, $hash->{NAME}.": parse cmd returned :$cmd:";
 		}
 		if ($cmd =~ /^print (.*)/) {
-			$error=decode_utf8("$1");
+			$error=$1; #ReplaceSetMagic has already modified the string, treat it as error to send
 			$cmd="";
 		}
 		elsif ($cmd =~ /{(.*)}/) {
@@ -688,7 +688,7 @@ sub Signalbot_command($@){
 			$error = AnalyzeCommandChain($hash, $cmd);
 		}
 		if (defined $error) {
-			Signalbot_sendMessage($hash,$sender,"",$error);
+			Signalbot_sendMessage($hash,$sender,"",decode_utf8($error));
 		} else {
 			Signalbot_sendMessage($hash,$sender,"","Done");
 		}
@@ -2059,6 +2059,12 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<code>set Signalbot send "@({my $var=\"Joerg\";; return $var;;})" #FHEM "&( {plotAsPng('SVG_Temperatures')} )" Here come the current temperature plot</code><br>
 			</ul>
 			<br>
+		<li><b>set reply ....</b><br>
+			<a id="Signalbot-set-reply"></a>
+			Send message to previous sender. For detailed syntax, see "set send"<br>
+			If no recipient is given, sends the message back to the sender of the last received message. If the message came from a group (reading "msgGroupName" is set), the reply will go to the group, else the individual sender (reading "msgSender") is used.<br>
+			<b>Note:</b> You should only use this from a NOTIFY or DOIF that was triggered by an incoming message otherwise you risk using the wrong recipient.<br>
+		</li>
 		<li><b>set contact &ltnumber&gt &ltname&gt</b><br>
 		<a id="Signalbot-set-contact"></a>
 		Define a nickname for a phone number to be used with the send command and in readings<br>
@@ -2213,13 +2219,19 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		</li>
 		<li><b>favorites</b><br>
 		<a id="Signalbot-attr-favorites"></a>
-			Semicolon separated list of favorite definitions (see "cmdFavorite"). Favorites are identified either by their ID (defined by their order) or an optional alias in square brackets, preceding the command definition.<br><br>
-			Example: set lamp on;set lamp off;[lamp]set lamp on<br><br>
+			Semicolon separated list of favorite definitions (see "cmdFavorite"). Favorites are identified either by their ID (defined by their order) or an optional alias in square brackets, preceding the command definition.<br>
+		</li><li>
+			<a id="Signalbot-attr-favignore"></a>
+			Example: set lamp on;set lamp off;[lamp]set lamp on<br>
 			This defines 3 favorites numbered 1 to 3 where the third one can also be accessed with the alias "lamp".<br>
-			Using favorites you can define specific commands that can be executed without GoogleAuth by preceeding the command with a minus "-" sign.<br><br>
-			Example: -set lamp off;[lamp]-set lamp on;set door open<br><br>
+			Using favorites you can define specific commands that can be executed without GoogleAuth by preceeding the command with a minus "-" sign.<br>
+			Example: -set lamp off;[lamp]-set lamp on;set door open<br>
 			Both favorites 1 and 2 (or "lamp") can be executed without authentification while facorite 3 requires to be authentificated.<br>
-			You can use "get favorites" to validate your list and identify the correct IDs.<br>
+			You should use "get favorites" to validate your list and identify the correct IDs since no syntax checking is done when setting the attribute.<br>
+			Multiple commands in one favorite need to be separeted by two semicolons ";;". For better readability you can add new lines anywhere - they are ignored (but spaces are not).<br>
+			Special commands:<br>
+			You can also embed Perl code with curly brackets: <i>{my $var=ReadingsVal("sensor","temperature",0);; return $var;;}</i><br>
+			To just return a text and evaluate readings, you can use: <i>print Temperature is [sensor:temperature]</i><br>
 		</li>
 		<li><b>defaultPeer</b><br>
 		<a id="Signalbot-attr-defaultPeer"></a>

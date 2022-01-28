@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.4";
+my $Signalbot_VERSION="3.5";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -1950,16 +1950,16 @@ sub Signalbot_getPNG(@) {
 
 	my @special=split(",",$file);
 	#does the first part equal to a FHEM device?
-	my $sname = $special[0];
+	my $sname = shift @special;
 	my $shash = $defs{$sname};
 	if (defined $shash) {
 		Log3 $hash->{NAME}, 4 , $hash->{NAME}.": Attachment matches device $sname of type $shash->{TYPE}";
 		my $svg;
 		if ($shash->{TYPE} eq "SVG") {
-			$svg=plotAsPng($sname);
+			$svg=plotAsPng($sname,@special);
 		}
-		if ($shash->{TYPE} eq "DOIF" && @special>1) {
-			$svg=Signalbot_DOIFAsPng($shash,$special[1]);
+		if ($shash->{TYPE} eq "DOIF") {
+			$svg=Signalbot_DOIFAsPng($shash,@special);
 		}
 		return undef if !defined $svg;
 		return Signalbot_copyToFile($svg,"png");
@@ -1968,40 +1968,105 @@ sub Signalbot_getPNG(@) {
 }
 
 sub
-Signalbot_DOIFAsPng($$)
+Signalbot_DOIFAsPng($@)
 {
-	my ($hash,$id) = @_;
+	my ($hash,@params) = @_;
 	my (@webs, $mimetype, $svgdata, $rsvg, $pngImg);
-  
+
+	my $matchid=-1;
+	my $sizex=-1;
+	my $sizey=-1;
+	my $zoom=1.0;
+	my $matchdev="";
+	my $matchread="";
+
+	#If no further information given, take the first entry of uitables
+	if (@params == 0) {
+		$matchid=1;
+	} else {
+		foreach my $p (@params) {
+			my @par=split("=",$p);
+			my $cm=shift @par;
+			my $val=shift @par;
+			$matchid=$p if looks_like_number($p);
+			next if (!defined $cm || !defined $val);
+			if ($cm eq "id") {
+				$matchid=$val if looks_like_number($val);
+			} elsif ($cm eq "zoom") {
+				$zoom=$val if looks_like_number($val);
+			} elsif ($cm eq "dev") {
+				$matchdev=$val;
+			} elsif ($cm eq "val") {
+				$matchread=$val;
+			} elsif ($cm eq "sizex") {
+				$sizex=$val if looks_like_number($val);
+			} elsif ($cm eq "sizey") {
+				$sizey=$val if looks_like_number($val);
+			}
+		}
+	}
+
 	# "Error: DOIF has not uiTable defined"
 	return undef if (!defined $hash->{'uiTable'}{table});
 
-	my $table=$hash->{'uiTable'}{table}{0}{$id}{0}{0};
+	my $table=$hash->{'uiTable'}{table};
 	
-	# "Error: uiTable with ID $id not found" 
+	if (!defined $table) {
+		#Try uiState instead if no uiTable is defined
+		$table=$hash->{'uiState'}{table};
+	}
+	
+	# "Error: uiTable/uiState not defined" 
 	return undef if (!defined $table);
 	
-	$table =~ /.*(card\(.*\)),""\)/;
-	
-	my $card="package ui_Table;"."$1".";";
-	
-	if (defined $card && $card ne "") {
-		$svgdata=eval($card);
+	my $id=0;
+	my $cmd;
+	OUTER:
+	for (my $i=0;$i < scalar keys %{$table};$i++){
+		for (my $k=0;$k < scalar keys %{$table->{$i}};$k++){
+			for (my $l=0;$l < scalar keys %{$table->{$i}{$k}};$l++){
+				for (my $m=0;$m < scalar keys %{$table->{$i}{$k}{$l}};$m++) {
+					$id++;
+					my $table=$table->{$i}{$k}{$l}{$m};
+					$table =~ /.*DOIF_Widget\(.*?,.*?,.*?,(.*),.*\)/;
+					$cmd=$1;
+					next if !defined $cmd;
+					if ($matchid==$id) {
+						last OUTER;
+					} elsif ($matchid==-1) {
+						$cmd =~ /.*ReadingValDoIf\(\$hash,\'(.*?)\',\'(.*?)\'.*\)/;
+						next if ($matchdev ne "" && $matchdev ne $1);
+						next if ($matchread ne "" && $matchread ne $2);
+						last OUTER;
+					}
+				}
+			}
+		}
+		#Nothing found, since if something found we skip out with "last"
+		$cmd="";
+	}
+
+	if (defined $cmd && $cmd ne "") {
+		$cmd="package ui_Table;"."$cmd".";";
+		$svgdata=eval($cmd);
 		print $@;
 	} else {
-		# "Error: uiTable format error (no card)";
+		#print "Error: uiTable format error (no card)";
 		return undef;
 	}
 	
 	# "Error: getting data from card" 
 	return undef if (! defined $svgdata);
-
 	$svgdata='<?xml version="1.0" encoding="UTF-8"?> <svg>'.$svgdata.'</svg>';
 
 	eval {
 		require Image::LibRSVG;
 		$rsvg = new Image::LibRSVG();
-		$rsvg->loadImageFromString($svgdata);
+		if ($sizex != -1 && $sizey !=-1) {
+		$rsvg->loadFromStringAtZoomWithMax($svgdata, $zoom, $zoom, $sizex, $sizey  );
+		} else {
+		$rsvg->loadFromStringAtZoom($svgdata, $zoom, $zoom);
+		}
 		$pngImg = $rsvg->getImageBitmap();
 	};
 	if (defined $pngImg && $pngImg ne "") {

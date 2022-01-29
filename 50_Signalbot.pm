@@ -1979,6 +1979,7 @@ Signalbot_DOIFAsPng($@)
 	my $zoom=1.0;
 	my $matchdev="";
 	my $matchread="";
+	my $target="uiTable";
 
 	#If no further information given, take the first entry of uitables
 	if (@params == 0) {
@@ -2002,19 +2003,13 @@ Signalbot_DOIFAsPng($@)
 				$sizex=$val if looks_like_number($val);
 			} elsif ($cm eq "sizey") {
 				$sizey=$val if looks_like_number($val);
+			} elsif ($cm eq "state") {
+				$target="uiState";
 			}
 		}
 	}
-
-	# "Error: DOIF has not uiTable defined"
-	return undef if (!defined $hash->{'uiTable'}{table});
-
-	my $table=$hash->{'uiTable'}{table};
-	
-	if (!defined $table) {
-		#Try uiState instead if no uiTable is defined
-		$table=$hash->{'uiState'}{table};
-	}
+	$target="uiState" if (!defined $hash->{$target}{table});
+	my $table=$hash->{$target}{table};
 	
 	# "Error: uiTable/uiState not defined" 
 	return undef if (!defined $table);
@@ -2027,8 +2022,8 @@ Signalbot_DOIFAsPng($@)
 			for (my $l=0;$l < scalar keys %{$table->{$i}{$k}};$l++){
 				for (my $m=0;$m < scalar keys %{$table->{$i}{$k}{$l}};$m++) {
 					$id++;
-					my $table=$table->{$i}{$k}{$l}{$m};
-					$table =~ /.*DOIF_Widget\(.*?,.*?,.*?,(.*),.*\)/;
+					my $tab=$table->{$i}{$k}{$l}{$m};
+					$tab =~ /.*DOIF_Widget\(.*?,.*?,.*?,(.*),.*\)/;
 					$cmd=$1;
 					next if !defined $cmd;
 					if ($matchid==$id) {

@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.5";
+my $Signalbot_VERSION="3.6";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -104,6 +104,7 @@ sub Signalbot_Initialize($) {
 												"cmdFavorite ".
 												"favorites:textField-long ".
 												"autoJoin:yes,no ".
+												"formatting:none,html,markdown,both ".
 												"registerMethod:SMS,Voice ".
 												"$readingFnAttributes";
 }
@@ -419,7 +420,10 @@ sub Signalbot_Set($@) {					#
 			}
 			@attachments=@newatt;
 		}
-
+		#Convert html or markdown to unicode
+		my $convmsg=Signalbot_convertText($hash,$message);
+		$message=$convmsg if defined $convmsg;
+		
 		#Send message to individuals (bulk)
 		if (@recipients > 0) {
 			Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
@@ -2087,6 +2091,92 @@ sub Signalbot_OSRel() {
 	}
 	close ($fh);
 	return "Unknown";
+}
+
+#Convert text with Markdown/html to Unicode
+sub Signalbot_convertText {
+    my ($hash,$msg) = @_;
+	my @tags;
+	my @htags = (
+		["bold" ,"<b>","</b>",0],
+		["italic","<i>","</i>",0],
+		["bold-italic","<bi>","</bi>",0],
+		["mono","<tt>","</tt>",0],
+		["mono","<code>","</code>",0],
+		["underline","<u>","</u>",0],
+		["strikethrough","<s>","</s>",0],
+		["fraktur","<fraktur>","</fraktur>",0],
+		["script","<script>","</script>",0],
+		["square","<square>","</square>",0],
+	);
+	#not implemented - how to avoid accidental e.g. Hi_ok and you_ok should not trigger conversion to underline, e.g. only use / _.*?_ / as regex?
+	my @mtags = (
+		["italic"," _","_ ",1],
+		["strikethrough"," ~","~ ",1],
+		["bold"," \\*","\\* ",1],
+		["mono"," ``","`` ",1],
+	);
+#set SignalBot send @Joerg Diese _Nachricht_ soll <b>gedruckt</b> werden: *Convert:* Diese _Nachricht_ soll ``voll monospace`` <b>gedruckt</b> werden
+	my $format=AttrVal($hash->{NAME},"formatting","none");
+	push @tags, @htags if ($format eq "html" || $format eq "both");
+	push @tags, @mtags if ($format eq "markdown" || $format eq "both");
+
+	my $found=1;
+	my $matches=0;
+	my $text;
+	while ($found && $matches<100) {
+		$matches++;
+		$found=0;
+		foreach my $arr (@tags) {
+			my @val=@$arr;
+			$msg =~ /$val[1](.*?)$val[2]/;
+			if (defined $1) {
+				$text=toUnicode($val[0],$1);
+				if (defined $text) {
+					$text= " ".$text." " if $val[3];
+					$msg =~ s/$val[1].*?$val[2]/$text/;
+					$found=1;
+				}
+			}
+		}
+	}
+	return $msg;
+}
+
+#Converts normal ASCII into unicode with a special font or style
+sub toUnicode {
+	my ($font,$str) = @_;
+	
+	if ($font eq "underline") {
+		$str =~ s/./$&\x{332}/g;
+		return $str;
+	}
+	if ($font eq "strikethrough") {
+		$str =~ s/./$&\x{336}/g;
+		return $str;
+	}
+
+	my %uc = (
+		"bold" => [0x1d41a,0x1d400,0x1d7ce],
+		"italic" => [0x1d44e,0x1d434,0x30],
+		"bold-italic" => [0x1d482,0x1d468,0x30],
+		"script" => [0x1d4ea,0x1d4d0,0x30],	#Using boldface since normal misses some letter
+		"fraktur" => [0x1d586,0x1d56c,0x30],#Using boldface since normal misses some letter
+		"square" => [0x1f130,0x1f130,0x30],
+		"mono" => [0x1d68a,0x1d670,0x30],
+	);
+
+	return undef if (! defined $uc{$font});
+
+	my $rep=chr($uc{$font}[0])."-".chr($uc{$font}[0]+25).chr($uc{$font}[1])."-".chr($uc{$font}[1]+25).chr($uc{$font}[2])."-".chr($uc{$font}[2]+9);
+	$_=$str;
+	eval "tr/a-zA-Z0-9/$rep/";
+	return undef if $@;
+#Special handling for characters missing in some fonts
+#	0x1d455 => 0x1d629, #italic h -> italic sans-serif h or 0x210e (planck constant)
+#	0x1d4ba => 0x1d452, #script e -> serif e
+	$_ =~ tr/\x{1d455}\x{1d4ba}/\x{1d629}\x{1d452}/;
+	return $_;
 }
 
 ######################################

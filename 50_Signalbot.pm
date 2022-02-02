@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.6";
+my $Signalbot_VERSION="3.7";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -421,7 +421,8 @@ sub Signalbot_Set($@) {					#
 			@attachments=@newatt;
 		}
 		#Convert html or markdown to unicode
-		my $convmsg=Signalbot_convertText($hash,$message);
+		my $format=AttrVal($hash->{NAME},"formatting","none");
+		my $convmsg=formatTextUnicode($format,$message);
 		$message=$convmsg if defined $convmsg;
 		
 		#Send message to individuals (bulk)
@@ -2094,32 +2095,34 @@ sub Signalbot_OSRel() {
 }
 
 #Convert text with Markdown/html to Unicode
-sub Signalbot_convertText {
-    my ($hash,$msg) = @_;
+sub formatTextUnicode($$) {
+    my ($format,$msg) = @_;
 	my @tags;
 	my @htags = (
-		["bold" ,"<b>","</b>",0],
-		["italic","<i>","</i>",0],
-		["bold-italic","<bi>","</bi>",0],
-		["mono","<tt>","</tt>",0],
-		["mono","<code>","</code>",0],
-		["underline","<u>","</u>",0],
-		["strikethrough","<s>","</s>",0],
-		["fraktur","<fraktur>","</fraktur>",0],
-		["script","<script>","</script>",0],
-		["square","<square>","</square>",0],
+		["bold" ,"<b>","</b>"],
+		["italic","<i>","</i>"],
+		["bold-italic","<bi>","</bi>"],
+		["mono","<tt>","</tt>"],
+		["mono","<code>","</code>"],
+		["underline","<u>","</u>"],
+		["strikethrough","<s>","</s>"],
+		["fraktur","<fraktur>","</fraktur>"],
+		["script","<script>","</script>"],
+		["square","<square>","</square>"],
 	);
 	#not implemented - how to avoid accidental e.g. Hi_ok and you_ok should not trigger conversion to underline, e.g. only use / _.*?_ / as regex?
 	my @mtags = (
-		["italic"," _","_ ",1],
-		["strikethrough"," ~","~ ",1],
-		["bold"," \\*","\\* ",1],
-		["mono"," ``","`` ",1],
+		["italic","__","__:"],
+		["strikethrough","~~","~~"],
+		["bold"," \\*\\*","\\*\\*"],
+		["mono"," ``","`` "],
 	);
 #set SignalBot send @Joerg Diese _Nachricht_ soll <b>gedruckt</b> werden: *Convert:* Diese _Nachricht_ soll ``voll monospace`` <b>gedruckt</b> werden
-	my $format=AttrVal($hash->{NAME},"formatting","none");
-	push @tags, @htags if ($format eq "html" || $format eq "both");
 	push @tags, @mtags if ($format eq "markdown" || $format eq "both");
+	if ($format eq "html" || $format eq "both"){
+		$msg =~ s/<br>/\n/gs;
+		push @tags, @htags;
+	}
 
 	my $found=1;
 	my $matches=0;
@@ -2129,12 +2132,11 @@ sub Signalbot_convertText {
 		$found=0;
 		foreach my $arr (@tags) {
 			my @val=@$arr;
-			$msg =~ /$val[1](.*?)$val[2]/;
+			$msg =~ /$val[1](.*?)$val[2]/s;
 			if (defined $1) {
-				$text=toUnicode($val[0],$1);
+				$text=formatStringUnicode($val[0],$1);
 				if (defined $text) {
-					$text= " ".$text." " if $val[3];
-					$msg =~ s/$val[1].*?$val[2]/$text/;
+					$msg =~ s/$val[1].*?$val[2]/$text/s;
 					$found=1;
 				}
 			}
@@ -2144,7 +2146,7 @@ sub Signalbot_convertText {
 }
 
 #Converts normal ASCII into unicode with a special font or style
-sub toUnicode {
+sub formatStringUnicode($$) {
 	my ($font,$str) = @_;
 	
 	if ($font eq "underline") {

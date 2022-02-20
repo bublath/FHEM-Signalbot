@@ -18,9 +18,11 @@ VIEWER=eog
 DBVER=0.19
 OPERATION=$1
 JAVA_VERSION=11.0
+VEXT=
 
-if [ $OPERATION = "experimental" ]; then
-  SIGNALVERSION="0.10.2"
+if [ "$OPERATION" = "experimental" ]; then
+  SIGNALVERSION="0.10.4"
+  VEXT="-Linux"
   JAVA_VERSION=17.0
   OPERATION=
 fi
@@ -162,10 +164,10 @@ KNOWN=("amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "
 GETLIBS=1
 if [[ ! " ${KNOWN[*]} " =~ " ${IDENTSTR} " ]]; then
     echo "$IDENTSTR is an unsupported combination - signal-cli binary libraries might not work"
-	if [ $ARCH = "amd64" && $GLIBC < "2.31" ]; then
+	if [ "$ARCH" = "amd64" ] && [ "$GLIBC" != "2.31" ]; then
 		GLIBC=2.28
 		echo "Fallback to GLIBC $GLIBC";
-	elif [ $ARCH = "armhf" && $GLIBC < "2.31" ]; then
+	elif [ "$ARCH" = "armhf" ] && [ "$GLIBC" != "2.31" ]; then
 	    GLIBC=2.27
 		echo "Fallback to GLIBC $GLIBC";
 	else
@@ -268,7 +270,8 @@ fi
 echo -n "Checking system Java version ... "
 JVER=`java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
 echo $JVER
-if ! [ "$JAVA_VERSION" = "$JVER" ]; then
+if ! [ "$JVER" = "17.0" ]; then 
+  if ! [ "$JAVA_VERSION" = "$JVER" ]; then
 	if [ -e /opt/java ]; then
 		echo -n "Checking for Java in /opt/java ... "
 		JVER=`/opt/java/bin/java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
@@ -294,6 +297,7 @@ if ! [ "$JAVA_VERSION" = "$JVER" ]; then
 		echo "done"
 	fi
 	export JAVA_HOME=/opt/java
+  fi
 fi
 }
 
@@ -330,7 +334,7 @@ if [ $NEEDINSTALL = 1 ]; then
 	stop_service
 	cd /tmp
 	echo -n "Downloading signal-cli $SIGNALVERSION..."
-	wget -qN https://github.com/AsamK/signal-cli/releases/download/v$SIGNALVERSION/signal-cli-$SIGNALVERSION.tar.gz
+	wget -qN https://github.com/AsamK/signal-cli/releases/download/v$SIGNALVERSION/signal-cli-$SIGNALVERSION$VEXT.tar.gz -O signal-cli-$SIGNALVERSION.tar.gz
 	if ! [ -e signal-cli-$SIGNALVERSION.tar.gz ]; then
 		echo "failed"
 		exit

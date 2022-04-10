@@ -19,7 +19,7 @@ use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-#use Data::Dumper;
+use Data::Dumper;
 use Time::HiRes qw( usleep );
 use URI::Escape;
 use HttpUtils;
@@ -53,7 +53,6 @@ use vars qw($FW_detail);  # currently selected device for detail view
 	"getContactNumber" 		=> "s",
 	"isContactBlocked" 		=> "s",
 	"isGroupBlocked" 		=> "ay",
-	"version" 				=> "",
 	"isMember"				=> "ay",
 	"createGroup"			=> "sass",
 	"getSelfNumber"			=> "", #V0.9.1
@@ -83,10 +82,10 @@ use vars qw($FW_detail);  # currently selected device for detail view
 my %regsig = (
 	"listAccounts"			=> "",
 	"link"					=> "s",
-	"registerWithCaptcha"	=> "sbs",	#not implemented yet
-	"verifyWithPin"			=> "sss",	#not implemented yet
-	"register"				=> "sb",	#not implemented yet
-	"verify"				=> "ss",	#not implemented yet
+	"registerWithCaptcha"	=> "sbs",
+	"verifyWithPin"			=> "sss", #not used
+	"register"				=> "sb",
+	"verify"				=> "ss",
 	"version" 				=> "",
 );
 
@@ -162,7 +161,7 @@ sub Signalbot_Set($@) {					#
 	my @accounts;
 	@accounts =@{$hash->{helper}{accountlist}} if defined $hash->{helper}{accountlist};
 	my $sets=	"send:textField ".
-				"updateProfile:textField ";
+				"updateProfile:textField ".
 				"reply:textField ";
 	$sets.=	"contact:textField ".
 				"createGroup:textField ".
@@ -437,7 +436,7 @@ sub Signalbot_prepareSend($@) {
 		
 	LogUnicode $hash->{NAME}, 3 , $hash->{NAME}.": Before parse:" .$fullstring. ":";
 	my $tmpmessage = $fullstring =~ s/\\n/\x0a/rg;
-	my @args=parse_line(' ',0,$tmpmessage);
+	@args=parse_line(' ',0,$tmpmessage);
 	
 	while(my $curr_arg = shift @args){
 		if($curr_arg =~ /^\@([^#].*)$/){	#Compatbility with SiSi - also allow @# as groupname
@@ -1096,8 +1095,9 @@ sub Signalbot_setup2($@) {
 	
 	my @ver=split('\.',$version);
 	#to be on the safe side allow 2 digits for version number, so 0.8.0 results to 800, 1.10.11 would result in 11011
-	$version=$ver[0]*10000+$ver[1]*100+$ver[2];
+	print Dumper(@ver);
 	$hash->{VERSION}="Signalbot:".$Signalbot_VERSION." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
+	$version=$ver[0]*10000+$ver[1]*100+$ver[2];
 	$hash->{helper}{version}=$version;
 	$hash->{model}=Signalbot_OSRel();
 	#listAccounts only available in registration instance
@@ -1311,6 +1311,7 @@ sub Signalbot_CallDbus($@) {
 		}
 		$counter--; #usleep(10000); 
 	}
+	Log3 $hash->{NAME}, 3, $hash->{NAME}.": Dbus Timeout for $function";
 	return undef;
 }
 

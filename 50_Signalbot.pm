@@ -19,7 +19,7 @@ use Scalar::Util qw(looks_like_number);
 use File::Temp qw( tempfile tempdir );
 use Text::ParseWords;
 use Encode;
-use Data::Dumper;
+#use Data::Dumper;
 use Time::HiRes qw( usleep );
 use URI::Escape;
 use HttpUtils;
@@ -163,7 +163,7 @@ sub Signalbot_Set($@) {					#
 	my $sets=	"send:textField ".
 				"updateProfile:textField ".
 				"reply:textField ";
-	$sets.=	"contact:textField ".
+	$sets.=	"addContact:textField ".
 				"createGroup:textField ".
 				"invite:textField ".
 				"block:textField ".
@@ -171,15 +171,12 @@ sub Signalbot_Set($@) {					#
 				"updateGroup:textField ".
 				"quitGroup:textField ".
 				"joinGroup:textField " if $version <1000;
-	$sets.=	
-#				"deleteContact:textField deleteGroup:textField addGroupMembers:textField removeGroupMembers:textField ".
-				"group:widgetList,12,select,addMembers,removeMembers,addAdmins,removeAdmins,invite,create,block,update,".
-				"quit,join,unblock,1,textField contact:widgetList,5,select,add,remove,block,unblock,1,textField " if $version >=1000;
+	$sets.=		"group:widgetList,13,select,addMembers,removeMembers,addAdmins,removeAdmins,invite,create,delete,block,unblock,update,".
+				"quit,join,1,textField contact:widgetList,5,select,add,delete,block,unblock,1,textField " if $version >=1000;
 	my $sets_reg=	"link:noArg ".
-					"register:textField ".
-					"captcha:textField ".
-					"verify:textField ";
-					
+					"register:textField ";
+	$sets_reg	.=	"captcha:textField " if defined ($hash->{helper}{register});
+	$sets_reg	.=	"verify:textField " if defined ($hash->{helper}{verification});
 	
 	$sets.=$sets_reg if defined $multi && $multi==1;
 	$sets=$sets_reg if $account eq "none";
@@ -195,6 +192,8 @@ sub Signalbot_Set($@) {					#
 		my $ret = Signalbot_setup($hash);
 		$hash->{STATE} = $ret if defined $ret;
 		$hash->{helper}{qr}=undef;
+		$hash->{helper}{register}=undef;
+		$hash->{helper}{verification}=undef;
 		Signalbot_createRegfiles($hash);
 		return undef;
 	}
@@ -294,7 +293,7 @@ sub Signalbot_Set($@) {					#
 			return undef;
 		}
 		return $ret;
-	} elsif ( $cmd eq "contact") {
+	} elsif ( $cmd eq "addContact" || $cmd eq "contactadd") {
 		if (@args<2 ) {
 			return "Usage: set ".$hash->{NAME}." contact <number> <nickname>";
 		} else {
@@ -304,7 +303,7 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
-	} elsif ( $cmd eq "deleteContact") {
+	} elsif ( $cmd eq "deleteContact" || $cmd eq "contactdelete") {
 		return "Usage: set ".$hash->{NAME}." deleteContact <number|name>" if (@args<1);
 		return "signal-cli 0.10.0+ required" if $version<1000;
 		my $nickname = join (" ",@args);
@@ -315,7 +314,7 @@ sub Signalbot_Set($@) {					#
 		my $ret=Signalbot_CallS($hash,"deleteRecipient",$number);
 		return $hash->{helper}{lasterr} if !defined $ret;
 		return;
-	} elsif ( $cmd eq "deleteGroup") {
+	} elsif ( $cmd eq "deleteGroup" || $cmd eq "groupdelete") {
 		return "Usage: set ".$hash->{NAME}." deleteGroup <groupname>" if (@args<1);
 		return "signal-cli 0.10.0+ required" if $version<1000;
 		my $ret=Signalbot_CallSG($hash,"deleteGroup",shift @args);
@@ -332,7 +331,7 @@ sub Signalbot_Set($@) {					#
 		return Signalbot_memberShip($hash,"addAdmins",@args);
 	} elsif ( $cmd eq "removeGroupAdmins" || $cmd eq "groupremoveAdmins") {
 		return Signalbot_memberShip($hash,"removeAdmins",@args);
-	} elsif ( $cmd eq "createGroup") {
+	} elsif ( $cmd eq "createGroup" || $cmd eq "groupcreate") {
 		if (@args<1) {
 			return "Usage: set ".$hash->{NAME}." createGroup <group name> &[path to thumbnail] [member1,member2...]";
 		} else {
@@ -373,7 +372,7 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
-	} elsif ( $cmd eq "updateGroup") {
+	} elsif ( $cmd eq "updateGroup" || $cmd eq "groupupdate") {
 		if (@args<1 || @args>3 ) {
 			return "Usage: set ".$hash->{NAME}." updateGroup <group name> #[new name] &[path to thumbnail]";
 		} else {
@@ -381,7 +380,7 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
-	} elsif ( $cmd eq "invite") {
+	} elsif ( $cmd eq "invite" || $cmd eq "groupinvite") {
 		if (@args < 2 ) {
 			return "Usage: set ".$hash->{NAME}." invite <group name> <contact1> [<contact2] ...]";
 		} else {
@@ -607,7 +606,10 @@ sub Signalbot_Get($@) {
 			my $blocked=Signalbot_CallS($hash,"isContactBlocked",$number);
 			return $hash->{helper}{lasterr} if !defined $blocked;
 			my $name=$hash->{helper}{contacts}{$number};
-			$name="UNKNOWN" unless defined $name;
+			if (!defined $name) {
+				$name=Signalbot_getContactName($number);
+			}
+			$name="UNKNOWN" if ($name =~/^\+/);
 			if (! ($number =~ /^\+/) ) { $number="Unknown"; }
 			if ($arg eq "all" || $blocked==0) {
 				$ret.=sprintf($format,$number,$name,$blocked==1?"yes":"no");
@@ -1095,7 +1097,6 @@ sub Signalbot_setup2($@) {
 	
 	my @ver=split('\.',$version);
 	#to be on the safe side allow 2 digits for version number, so 0.8.0 results to 800, 1.10.11 would result in 11011
-	print Dumper(@ver);
 	$hash->{VERSION}="Signalbot:".$Signalbot_VERSION." signal-cli:".$version." Protocol::DBus:".$Protocol::DBus::VERSION;
 	$version=$ver[0]*10000+$ver[1]*100+$ver[2];
 	$hash->{helper}{version}=$version;
@@ -1973,7 +1974,7 @@ sub Signalbot_Detail {
 			$ret .= "You seem to access FHEM from a Linux Desktop. Please consider to download <a href=fhem/signal/signalcaptcha.desktop download>this mine scheme<\/a> and install under ~/.local/share/applications/signalcaptcha.desktop<br>";
 			$ret .= "To activate it execute <b>xdg-mime default signalcaptcha.desktop x-scheme-handler/signalcaptcha</b> from your shell. This helps to mostly automate the registration process, however seems only to work with Firefox (not with Chromium)<br><br>";
 		}
-		$ret .= "Visit <a href=https://signalcaptchas.org/registration/generate.html>Signal Messenger Captcha Page<\/a> and complete the potential Captcha (often you will see an empty page which means you already passed just by visiting the page).<br><br>";
+		$ret .= "Visit <a href=https://signalcaptchas.org/registration/generate.html>Signal Messenger Captcha Page<\/a> or <a href=https://signalcaptchas.org/challenge/generate.html>Alternative Captcha Page<\/a> and complete the potential Captcha (often you will see an empty page which means you already passed just by visiting the page).<br><br>";
 		if ($FW_userAgent =~ /\(Windows/) {
 		$ret .= "If you applied the Windows registry hack, confirm opening Windows PowerShell and the rest will run automatically.<br><br>"
 		}
@@ -2352,8 +2353,8 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<a id="Signalbot-set-send"></a>
 			Send a message to a Signal recipient using @Name or @+49xxx as well as groups with #Group or #@Group along with an attachment with &<path to file> and a message.
 		</li>
-		<br>
-		<a id="Signalbot-setignore"></a>
+			<ul>
+			<a id="Signalbot-set-ignore"></a>
 			<li>Use round brackets to let FHEM execute the content (e.g <code>&({plotAsPng('SVG_Temperatures')}</code></li>
 			<li>If a recipient, group or attachment contains white spaces, the whole expression (including @ # or &) needs to be put in double quotes. Escape quotes within with \"</li>
 			<li>If the round brackets contain curly brackets to execute Perl commands, two semi-colons (;;) need to be used to seperate multiple commands and at the end. The return value will be used e.g. as recipient</li>
@@ -2367,16 +2368,16 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<br>
 			Example:<br>
 			<code>set Signalbot send "@({my $var=\"Joerg\";; return $var;;})" #FHEM "&( {plotAsPng('SVG_Temperatures')} )" Here come the current temperature plot</code><br>
-			</ul>
 			<br>
+			</ul>
 		<li><b>set reply ....</b><br>
 			<a id="Signalbot-set-reply"></a>
 			Send message to previous sender. For detailed syntax, see "set send"<br>
 			If no recipient is given, sends the message back to the sender of the last received message. If the message came from a group (reading "msgGroupName" is set), the reply will go to the group, else the individual sender (reading "msgSender") is used.<br>
 			<b>Note:</b> You should only use this from a NOTIFY or DOIF that was triggered by an incoming message otherwise you risk using the wrong recipient.<br>
 		</li>
-		<li><b>set contact &ltnumber&gt &ltname&gt</b><br>
-		<a id="Signalbot-set-contact"></a>
+		<li><b>set setContact &ltnumber&gt &ltname&gt</b><br>
+		<a id="Signalbot-set-setContact"></a>
 		Define a nickname for a phone number to be used with the send command and in readings<br>
 		</li>
 		<li><b>set block #&ltgroupname&gt|&ltcontact&gt</b><br>
@@ -2406,7 +2407,7 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		Join a group via an invitation group like (starting with https://signal.group/....). This link can be sent from the group properties with the "group link" function.<br>
 		Easiest way is to share via Signal and set the "autoJoin" attribute which be recognized by Signalbot to automatically join.<br>
 		</li>
-		<li><b>set quitGroup &ltgroup link&gt</b><br>
+		<li><b>set quitGroup &ltgroupname&gt</b><br>
 		<a id="Signalbot-set-quitGroup"></a>
 		Quit from a joined group. This only sets the membership to inactive, but does not delete the group (see "get groups")"<br>
 		</li>
@@ -2442,6 +2443,29 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<a id="Signalbot-set-reinit"></a>
 		Re-Initialize the module. For testing purposes when module stops receiving, has other issues or has been updated. Should not be necessary.<br>
 		</li>
+		<li><b>set group &ltgroup command&gt &ltgroupname&gt &ltargument&gt</b><br>
+		<a id="Signalbot-set-group"></a>
+		Combined command for group related functions:
+		<ul>
+			<li>addMembers,removeMembers,addAdmins,removeAdmins &ltgroupname&gt &ltcontact(s)&gt : Modify the member or admin list for the group</li>
+			<li>invite &ltgroupname&gt &ltcontact(s)&gt : Same as addMembers</li>
+			<li>create &ltgroupname&gt [&ltcontact(s)&gt]: create a new group and optionally define members</li>
+			<li>block/unblock &ltgroupname&gt : block/unblock receiving messages from a specific group</li>
+			<li>quit &ltgroupname&gt : Leave a group</li>
+			<li>join &ltgroup link&gt : Join a group with a group link.</li>
+			<li>delete &ltgroupname&gt : Delete a group from local repository (you should first leave it)</li>
+			<li>update &ltgroupname&gt &ltnew groupname&gt [&&ltavatar picture&gt] : Set a new name and/or picture for the group</li>
+		</ul>
+		</li>
+		<li><b>set contact &ltcontact command&gt &ltcontact&gt &ltargument&gt</b><br>
+		<a id="Signalbot-set-contact"></a>
+		Combined command for contact related functions:
+		<ul>
+			<li>add &ltcontact&gt &ltnickname&gt : Define a local name for a contact</li>
+			<li>delete &ltcontact&gt : Remove contact from local repository</li>
+			<li>block/unblock &ltcontact&gt : block/unblock receiving messages from contact</li>
+		</ul>
+		</li>
 		<br>
 	</ul>
 	
@@ -2470,6 +2494,10 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<a id="Signalbot-get-helpUnicode"></a>
 			Opens a cheat sheet for all supported replacements to format text or add emoticons using html-like tags or markdown.<br>
 			<b>Note:</b> This functionality needs to be enabled using the "formatting" attribute.<br>
+		</li>
+		<li><b>get groupPropertiese &ltgroup&gt</b><br>
+			<a id="Signalbot-get-groupPropertiese"></a>
+			Shows all known properties of the given group, like members, admins and permissions.
 		</li>
 		<br>
 	</ul>

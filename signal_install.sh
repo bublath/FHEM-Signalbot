@@ -1,34 +1,42 @@
 #!/bin/bash
 #$Id:$
-SCRIPTVERSION="3.5"
+SCRIPTVERSION="3.8"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
 SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
-SIGNALVERSION="0.9.2"
+SIGNALVERSION="0.9.2"	#Default for systems that don't hava Java17
+ALTVERSION="0.10.4"		#Default for systems with Java17
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
 SYSTEMD=/etc/systemd/system
 LOG=/tmp/signal_install.log
 TMPFILE=/tmp/signal$$.tmp
-VIEWER=eog
 DBVER=0.19
 OPERATION=$1
-JAVA_VERSION=11.0
-VEXT=
+
+#Check if Java 17 installation is available for this system
+J17=`apt-cache search --names-only 'openjdk-17-jdk-headless'`
+if [ "$J17" != "" ]; then
+  SIGNALVERSION=$ALTVERSION
+  VEXT="-Linux"
+  JAVA_VERSION=17.0
+  NATIVE_JAVA17=yes
+else 
+  JAVA_VERSION=11.0
+  NATIVE_JAVA17=no
+  VEXT=
+fi
 
 if [ "$OPERATION" = "experimental" ]; then
-  SIGNALVERSION="0.10.4"
+  SIGNALVERSION=$ALTVERSION
   VEXT="-Linux"
   JAVA_VERSION=17.0
   OPERATION=
 fi
-
-#Make sure picture viewer exists
-VIEWER=`which $VIEWER`
 
 #Get OS data
 if [ -e /etc/os-release ]; then
@@ -84,7 +92,7 @@ install_by_file() {
 	PACKAGE=$2
 	echo -n "Checking for $FILE..."
 	if ! [ -e "$FILE" ]; then
-		echo -n "installing ($PACKAGE)"
+		echo -n "installing ($PACKAGE)..."
 		apt-get -q -y install $PACKAGE >>$LOG
 		if ! [ -e "$FILE" ]; then
 			echo "Failed to install $FILE"
@@ -197,6 +205,7 @@ echo "Signal version:               $SIGNALVERSION"
 echo "System library path:          $LIBPATH"
 echo "System architecture:          $ARCH"
 echo "System GLIBC version:         $GLIBC"
+echo "Using Java version:           $JAVA_VERSION"
 fi
 
 check_and_update() {
@@ -270,6 +279,18 @@ fi
 echo -n "Checking system Java version ... "
 JVER=`java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
 echo $JVER
+if [ "$JVER" != "17.0" ] && [ $NATIVE_JAVA17 = "yes" ]; then
+	echo -n "Installing openjdk-17-jre-headless..."
+	apt-get -q -y install openjdk-17-jre-headless >>$LOG
+	JVER=`java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+	if [ "$JVER" = "17.0" ]; then
+		echo "done"
+	else 
+		echo "failed"
+		exit
+	fi
+fi
+
 if ! [ "$JVER" = "17.0" ]; then 
   if ! [ "$JAVA_VERSION" = "$JVER" ]; then
 	if [ -e /opt/java ]; then
@@ -318,7 +339,7 @@ if [ -x "$SIGNALPATH/signal/bin/signal-cli" ]; then
 	if [ "$CHECKVER" = "signal-cli $SIGNALVERSION" ]; then
 		echo "signal-cli matches target version...ok"
 	else 
-		echo -n "Update to current version (y/N)? "
+		echo -n "Update to current version $SIGNALVERSION (y/N)? "
 		read REPLY
 		if [ "$REPLY" = "y" ]; then
 			NEEDINSTALL=1

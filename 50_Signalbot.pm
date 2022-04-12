@@ -310,9 +310,7 @@ sub Signalbot_Set($@) {					#
 		my $number=Signalbot_translateContact($hash,$nickname);
 		return "Unknown contact" if !defined $number;
 		delete $hash->{helper}{contacts}{$number} if defined $hash->{helper}{contacts}{$number};
-		#Signalbot_CallS($hash,"deleteContact",$number);
-		my $ret=Signalbot_CallS($hash,"deleteRecipient",$number);
-		return $hash->{helper}{lasterr} if !defined $ret;
+		Signalbot_CallA($hash,"deleteRecipient",$number);
 		return;
 	} elsif ( $cmd eq "deleteGroup" || $cmd eq "groupdelete") {
 		return "Usage: set ".$hash->{NAME}." deleteGroup <groupname>" if (@args<1);
@@ -353,17 +351,15 @@ sub Signalbot_Set($@) {					#
 		}
 		my @group=Signalbot_getGroup($hash,$args[0]);
 		return join(" ",@group) unless @group>1;
-		my $ret=Signalbot_CallS($hash,"quitGroup",\@group);
-		return $hash->{helper}{lasterr} if !defined $ret;
+		Signalbot_CallA($hash,"quitGroup",\@group);
 		return;
 	} elsif ( $cmd eq "joinGroup" || $cmd eq "groupjoin") {
 		if (@args!=1) {
 			return "Usage: set ".$hash->{NAME}." ".$cmd." <group link>";
 		}
-		my $ret=Signalbot_CallS($hash,"joinGroup",$args[0]);
-		return $hash->{helper}{lasterr} if !defined $ret;
+		Signalbot_CallA($hash,"joinGroup",$args[0]);
 		return;
-	} elsif ( $cmd eq "block" || $cmd eq "unblock" || $cmd eq "contactblock" || $cmd eq "contactunblock") {
+	} elsif ( $cmd eq "block" || $cmd eq "unblock" || $cmd eq "contactblock" || $cmd eq "contactunblock" || $cmd eq "groupblock" || $cmd eq "groupunblock") {
 		if (@args!=1) {
 			return "Usage: set ".$hash->{NAME}." ".$cmd." <group name>|<contact>";
 		} else {
@@ -409,8 +405,7 @@ sub Signalbot_memberShip($@) {
 		return "Unknown contact $contact" if !defined $c;
 		push @contacts,$c;
 	}
-	my $ret=Signalbot_CallSG($hash,$func,$group,\@contacts);
-	return $hash->{helper}{lasterr} if !defined $ret;
+	Signalbot_CallAG($hash,$func,$group,\@contacts);
 	return;
 }
 		
@@ -894,8 +889,8 @@ sub Signalbot_MessageReceived ($@) {
 	my $join=AttrVal($hash->{NAME},"autoJoin","no");
 	if ($join eq "yes") {
 		if ($message =~ /^https:\/\/signal.group\//) {
-			my $ret=Signalbot_CallS($hash,"joinGroup",$message);
-			return $hash->{helper}{lasterr} if !defined $ret;
+			Signalbot_CallA($hash,"joinGroup",$message);
+			return;
 		}
 	}
 	
@@ -1258,6 +1253,10 @@ sub Signalbot_CallDbus($@) {
 			}
 			my $b=$msg->get_body();
 			my 	@body=@$b;
+			if (!defined $hash->{$function}) {
+				LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Invalid callback: $function Args:".join(",",@body);
+				return;
+			}
 			LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": DBus callback: $function Args:".join(",",@body);
 			CallFn($hash->{NAME},$function,$hash,@body);
 		}

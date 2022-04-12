@@ -8,7 +8,7 @@ SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
 SIGNALVERSION="0.9.2"	#Default for systems that don't hava Java17
-ALTVERSION="0.10.4"		#Default for systems with Java17
+ALTVERSION="0.10.5"		#Default for systems with Java17
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -167,15 +167,12 @@ fi
 GLIBC=`ldd --version |  grep -m1 -o '[0-9]\.[0-9][0-9]' | head -n 1`
 
 IDENTSTR=$ARCH-glibc$GLIBC-$SIGNALVERSION
-KNOWN=("amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "armhf-glibc2.28-0.9.2" "armhf-glibc2.31-0.9.2" "amd64-glibc2.27-0.10.4" "amd64-glibc2.31-0.10.4" "armhf-glibc2.28-0.10.4" "armhf-glibc2.31-0.10.4")
+KNOWN=("amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "armhf-glibc2.28-0.9.2" "armhf-glibc2.31-0.9.2" "amd64-glibc2.28-0.10.5" "amd64-glibc2.31-0.10.5" "armhf-glibc2.28-0.10.5" "armhf-glibc2.31-0.10.5")
 
 GETLIBS=1
 if [[ ! " ${KNOWN[*]} " =~ " ${IDENTSTR} " ]]; then
     echo "$IDENTSTR is an unsupported combination - signal-cli binary libraries might not work"
-	if [ "$ARCH" = "amd64" ] && [ "$GLIBC" != "2.31" ]; then
-		GLIBC=2.27
-		echo "Fallback to GLIBC $GLIBC";
-	elif [ "$ARCH" = "armhf" ] && [ "$GLIBC" != "2.31" ]; then
+	if [ "$GLIBC" != "2.31" ]; then
 	    GLIBC=2.28
 		echo "Fallback to GLIBC $GLIBC";
 	else
@@ -378,8 +375,11 @@ if [ $NEEDINSTALL = 1 ]; then
 			echo "Updating native libs for $IDENTSTR"
 			if [ $JAVA_VERSION = "11.0" ]; then
 				zip -u $SIGNALPATH/signal/lib/zkgroup-java-*.jar libzkgroup.so
+				zip -u $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
+			else
+				zip -u $SIGNALPATH/signal/lib/libsignal-client-*.jar libsignal_jni.so
 			fi
-			zip -u $SIGNALPATH/signal/lib/signal-client-java-*.jar libsignal_jni.so
+
 			#Use updated libs in jar instead of /usr/lib
 			#mv libsignal_jni.so libzkgroup.so $LIBPATH
 			#rm -f $LIBDIR/libzkgroup.so $LIBDIR/libsignal_jni.so

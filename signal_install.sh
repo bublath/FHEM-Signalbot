@@ -17,10 +17,15 @@ LOG=/tmp/signal_install.log
 TMPFILE=/tmp/signal$$.tmp
 DBVER=0.19
 OPERATION=$1
+JAVACMD=java
 
 #Check if Java 17 installation is available for this system
 J17=`apt-cache search --names-only 'openjdk-17-jdk-headless'`
-if [ "$J17" != "" ]; then
+if ! [ "$JAVA_HOME" = "" ]; then
+	JAVACMD=$JAVA_HOME/bin/java
+fi
+JVER=`$JAVA_HOME/bin/java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+if [ "$J17" != "" ] || [ "$JVER" = "17.0" ]; then
   SIGNALVERSION=$ALTVERSION
   VEXT="-Linux"
   JAVA_VERSION=17.0
@@ -274,7 +279,7 @@ else
 fi
 
 echo -n "Checking system Java version ... "
-JVER=`java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+JVER=`$JAVACMD --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
 echo $JVER
 if [ "$JVER" != "17.0" ] && [ $NATIVE_JAVA17 = "yes" ]; then
 	echo -n "Installing openjdk-17-jre-headless..."

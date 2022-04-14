@@ -32,6 +32,7 @@ require FHEM::Text::Unicode;
 use FHEM::Text::Unicode qw(:ALL);
 use vars qw(%FW_webArgs); # all arguments specified in the GET
 use vars qw($FW_detail);  # currently selected device for detail view
+use vars qw($FW_RET);
 
 #maybe really get introspective here instead of handwritten list
  my %signatures = (
@@ -130,7 +131,7 @@ sub Signalbot_Initialize($) {
 
 sub Signalbot_sendMsg($@) {
 	my ($arg) = @_;
-	FW_digestCgi($arg);
+	my ($cmd, $cmddev) = FW_digestCgi($arg);
 	my $mod=$FW_webArgs{detail};
 	my $snd=$FW_webArgs{send};
 	my $hash = $defs{$mod};
@@ -138,10 +139,12 @@ sub Signalbot_sendMsg($@) {
 	@args=parse_line(' ',0,join(" ",@args));
 	my $ret=Signalbot_prepareSend($hash,"send",@args);
 	readingsSingleUpdate($hash, 'lastError', $ret,1) if defined $ret;
-#	my $name = $hash->{NAME};
-#	my $web=$hash->{CL}{SNAME};
-#	my $peer=$hash->{CL}{PEER};
-#	DoTrigger($web,"JS#$peer:location.href=".'"'."?detail=$name".'"');
+	#$FW_XHR=1;
+	#This does not work als {CL} is not set here
+	#my $name = $hash->{NAME};
+	#my $web=$hash->{CL}{SNAME};
+	#my $peer=$hash->{CL}{PEER};
+	#DoTrigger($web,"JS#$peer:location.href=".'"'."?detail=$name".'"');
 	return 0;
 }
 
@@ -602,7 +605,7 @@ sub Signalbot_Get($@) {
 			return $hash->{helper}{lasterr} if !defined $blocked;
 			my $name=$hash->{helper}{contacts}{$number};
 			if (!defined $name) {
-				$name=Signalbot_getContactName($number);
+				$name=Signalbot_getContactName($hash,$number);
 			}
 			$name="UNKNOWN" if ($name =~/^\+/);
 			if (! ($number =~ /^\+/) ) { $number="Unknown"; }
@@ -2018,7 +2021,7 @@ sub Signalbot_Detail {
               "action='$FW_ME/Signalbot_sendMsg'>";
   $ret .= "<table class=\"block wide\">";
   $ret .= "<td>";
-  $ret .= FW_submit("submit", "send message ")."<input type=\"text\" name=\"send\" size=\"80\" value=\"\">";
+  $ret .= FW_submit("submit", "send message ")."<input type=\"text\" name=\"send\" size=\"80\">";
   $ret .= "<input type=\"hidden\" name=\"detail\" value=\"$hash->{NAME}\">";
   $ret .= "</table></form>";
 	
@@ -2130,7 +2133,9 @@ sub Signalbot_getPNG(@) {
 		Log3 $hash->{NAME}, 4 , $hash->{NAME}.": Attachment matches device $sname of type $shash->{TYPE}";
 		my $svg;
 		if ($shash->{TYPE} eq "SVG") {
+			my $FW_RET_save=$FW_RET;
 			$svg=plotAsPng($sname,@special);
+			$FW_RET=$FW_RET_save;
 		}
 		if ($shash->{TYPE} eq "DOIF") {
 			$svg=Signalbot_DOIFAsPng($shash,@special);

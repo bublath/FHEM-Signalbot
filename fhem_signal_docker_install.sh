@@ -3,7 +3,7 @@ SCRIPTVERSION="$Id:2.1$"
 # Author: Adimarantis
 # License: GPL
 #Install script for FHEM including signal-cli
-FHEMVERSION=6.0
+FHEMVERSION=6.1
 FHEMUSER=fhem
 FHEMGROUP=fhem
 SIGNALVAR=/var/lib/signal-cli
@@ -55,8 +55,11 @@ if [ -z "$USER" ]; then
 	exit
 fi
 
+adduser $FHEMUSER >/dev/null
+addgroup $FHEMGROUP >/dev/null
+
 FHEM_UID=`id -u $FHEMUSER`
-FHEM_GID=`id -g $FHEMGROUP`
+FHEM_GID=`grep "$FHEMGROUP:" /etc/group | cut -d: -f3`
 
 echo "Will create a Docker FHEM instance including signal-cli for Signalbot usage"
 echo
@@ -191,6 +194,7 @@ fi
 check_and_create_path $BUILDDIR
 
 install_and_check docker docker.io
+install_and_check docker-compose docker-compose
 install_and_check wget wget
 
 cd $BUILDDIR
@@ -305,7 +309,7 @@ EOF
 }
 
 create_docker() {
-	REINST=0
+	REINST=1
 	cd $BUILDDIR
 	if [ -d fhem-$FHEMVERSION ]; then
 		echo "FHEM $FHEMVERSION directory already exists"
@@ -313,6 +317,8 @@ create_docker() {
 		read REPLY
 		if [ "$REPLY" = "y" ]; then
 			REINST=1
+		else
+			REINST=0
 		fi
 	fi	
 	if [ $REINST = 1 ]; then
@@ -349,6 +355,7 @@ create_docker() {
 	echo "done"
 	cd $BUILDDIR
 	cp entry.sh fhem-$FHEMVERSION
+	chmod u+x fhem-$FHEMVERSION/entry.sh
 	docker-compose up -d
 	docker exec -ti fhem_signal /opt/fhem/signal_install.sh docker
 # Restart container now that everything is set

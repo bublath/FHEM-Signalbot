@@ -8,7 +8,7 @@ SIGNALPATH=/opt
 SIGNALUSER=signal-cli
 LIBPATH=/usr/lib
 SIGNALVERSION="0.9.2"	#Default for systems that don't hava Java17
-ALTVERSION="0.10.5"		#Default for systems with Java17
+ALTVERSION="0.10.9"		#Default for systems with Java17
 SIGNALVAR=/var/lib/$SIGNALUSER
 DBSYSTEMD=/etc/dbus-1/system.d
 DBSYSTEMS=/usr/share/dbus-1/system-services
@@ -172,7 +172,7 @@ fi
 GLIBC=`ldd --version |  grep -m1 -o '[0-9]\.[0-9][0-9]' | head -n 1`
 
 IDENTSTR=$ARCH-glibc$GLIBC-$SIGNALVERSION
-KNOWN=("amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "armhf-glibc2.28-0.9.2" "armhf-glibc2.31-0.9.2" "amd64-glibc2.28-0.10.5" "amd64-glibc2.31-0.10.5" "armhf-glibc2.28-0.10.5" "armhf-glibc2.31-0.10.5")
+KNOWN=("amd64-glibc2.27-0.9.2" "amd64-glibc2.28-0.9.2" "amd64-glibc2.31-0.9.2" "armhf-glibc2.28-0.9.2" "armhf-glibc2.31-0.9.2" "amd64-glibc2.28-0.10.9" "amd64-glibc2.31-0.10.9" "armhf-glibc2.28-0.10.9" "armhf-glibc2.31-0.10.9")
 
 GETLIBS=1
 if [[ ! " ${KNOWN[*]} " =~ " ${IDENTSTR} " ]]; then

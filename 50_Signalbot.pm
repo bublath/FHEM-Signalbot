@@ -596,8 +596,6 @@ sub Signalbot_Get($@) {
 		$ret.="\n(A)=GoogleAuth required to execute command";
 		return $ret;
 	} elsif ($cmd eq "contacts" && defined $arg) {
-		Signalbot_CallA($hash,"listNumbers");
-		return;
 		my $num=Signalbot_CallS($hash,"listNumbers");
 		return $hash->{helper}{lasterr} if !defined $num;
 		my @numlist=@$num;

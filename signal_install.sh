@@ -24,7 +24,14 @@ J17=`apt-cache search --names-only 'openjdk-17-jdk-headless'`
 if ! [ "$JAVA_HOME" = "" ]; then
 	JAVACMD=$JAVA_HOME/bin/java
 fi
-JVER=`$JAVA_HOME/bin/java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+if [ -e "/opt/java" ]; then
+    JVER=`/opt/java/bin/java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+	if [ "$JVER" = "17.0" ]; then
+	  JAVACMD="/opt/java/bin/java"
+	  export JAVA_HOME="/opt/java"
+	 fi
+fi
+JVER=`$JAVACMD --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
 if [ "$J17" != "" ] || [ "$JVER" = "17.0" ]; then
   SIGNALVERSION=$ALTVERSION
   VEXT="-Linux"
@@ -207,7 +214,7 @@ echo "Signal version:               $SIGNALVERSION"
 echo "System library path:          $LIBPATH"
 echo "System architecture:          $ARCH"
 echo "System GLIBC version:         $GLIBC"
-echo "Using Java version:           $JAVA_VERSION"
+echo "Using Java version:           $JAVA_VERSION ($JAVACMD)"
 fi
 
 check_and_update() {

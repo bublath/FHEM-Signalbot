@@ -160,6 +160,7 @@ sub Signalbot_Set($@) {					#
 	my $cmd = shift @args;
 	my $account = ReadingsVal($name,"account","none");
 	my $version = $hash->{helper}{version};
+	return "$name not initialized" if (!defined $version);
 	my $multi = $hash->{helper}{multi};
 	my @accounts;
 	@accounts =@{$hash->{helper}{accountlist}} if defined $hash->{helper}{accountlist};
@@ -538,6 +539,8 @@ sub Signalbot_prepareSend($@) {
 sub Signalbot_Get($@) {
 	my ($hash, $name, @args) = @_;
 	my $version = $hash->{helper}{version};	
+	return "$name not initialized" if (!defined $version);
+
 	my $numberOfArgs  = int(@args);
 	return "Signalbot_Get: No cmd specified for get" if ( $numberOfArgs < 1 );
 
@@ -593,6 +596,8 @@ sub Signalbot_Get($@) {
 		$ret.="\n(A)=GoogleAuth required to execute command";
 		return $ret;
 	} elsif ($cmd eq "contacts" && defined $arg) {
+		Signalbot_CallA($hash,"listNumbers");
+		return;
 		my $num=Signalbot_CallS($hash,"listNumbers");
 		return $hash->{helper}{lasterr} if !defined $num;
 		my @numlist=@$num;
@@ -1256,10 +1261,6 @@ sub Signalbot_CallDbus($@) {
 			}
 			my $b=$msg->get_body();
 			my 	@body=@$b;
-			if (!defined $hash->{$function}) {
-				LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Invalid callback: $function Args:".join(",",@body);
-				return;
-			}
 			LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": DBus callback: $function Args:".join(",",@body);
 			CallFn($hash->{NAME},$function,$hash,@body);
 		}
@@ -2341,6 +2342,7 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<li>Register and link multiple devices and switch between them</li>
 		<br>
 		</ul>
+</ul>
 	<a id="Signalbot-define"></a><br>
 	<b>Define</b>
 	<ul>

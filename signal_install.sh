@@ -161,7 +161,7 @@ check_and_compare_file() {
 ARCH=`arch`
 OSNAME=`uname`
 APT=`which apt`
-if [ $ARCH = "armv7l" ]; then 
+if [ $ARCH = "armv7l" ] || [ $ARCH = "aarch64" ]; then 
 	ARCH="armhf"
 	ARCHJ="arm"
 elif [ $ARCH = "x86_64" ]; then

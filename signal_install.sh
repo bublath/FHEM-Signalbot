@@ -1,6 +1,6 @@
 #!/bin/bash
 #$Id:$
-SCRIPTVERSION="3.11"
+SCRIPTVERSION="3.12"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -279,9 +279,26 @@ else
 fi
 
 echo -n "Checking system Java version ... "
-JVER=`$JAVACMD --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+if [ -e "$JAVACMD" ] || [ "$JAVACMD" = "java" ]; then
+	JVER=`$JAVACMD --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
+else
+   if [ -z "$JAVA_HOME" ]; then
+		JVER="not found"
+	else
+		echo "Can't find bin/java in JAVA_HOME=$JAVA_HOME. Please correct your JAVA_HOME setting"
+		exit
+	fi
+fi
 echo $JVER
+JAVAPKG="openjdk-17-jre-headless"
 if [ "$JVER" != "17.0" ] && [ $NATIVE_JAVA17 = "yes" ]; then
+	PKG=$(dpkg-query -W --showformat='${Status}\n' $JAVAPKG | grep "install")
+	if ! [ -z "$PKG" ]; then
+		echo "$JAVAPKG already installed but Java $JVER found. Please use"
+		echo "sudo update-alternatives --config java"
+		echo "to activate Java 17 or set you JAVA_HOME environment variable"
+		exit
+	fi
 	echo -n "Installing openjdk-17-jre-headless..."
 	apt-get -q -y install openjdk-17-jre-headless >>$LOG
 	JVER=`java --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`

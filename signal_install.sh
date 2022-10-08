@@ -33,14 +33,12 @@ if [ -e "/opt/java" ]; then
 fi
 JVER=`$JAVACMD --version | grep -m1 -o '[0-9][0-9]\.[0-9]'`
 if [ "$J17" != "" ] || [ "$JVER" = "17.0" ]; then
-  VEXT="-Linux"
   JAVA_VERSION=17.0
   NATIVE_JAVA17=yes
 else 
   echo "Warning: No Java17 found - will try experimental download of a Java 17 package"
   JAVA_VERSION=17.0
   NATIVE_JAVA17=no
-  VEXT=
 fi
 
 #Get OS data
@@ -374,7 +372,7 @@ if [ $NEEDINSTALL = 1 ]; then
 	stop_service
 	cd /tmp
 	echo -n "Downloading signal-cli $SIGNALVERSION..."
-	wget -qN https://github.com/AsamK/signal-cli/releases/download/v$SIGNALVERSION/signal-cli-$SIGNALVERSION$VEXT.tar.gz -O signal-cli-$SIGNALVERSION.tar.gz
+	wget -qN https://github.com/AsamK/signal-cli/releases/download/v$SIGNALVERSION/signal-cli-$SIGNALVERSION-Linux.tar.gz -O signal-cli-$SIGNALVERSION.tar.gz
 	if ! [ -e signal-cli-$SIGNALVERSION.tar.gz ]; then
 		echo "failed"
 		exit

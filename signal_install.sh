@@ -1,6 +1,6 @@
 #!/bin/bash
 #$Id:$
-SCRIPTVERSION="3.12"
+SCRIPTVERSION="3.13"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -164,17 +164,21 @@ check_and_compare_file() {
 ARCH=`arch`
 OSNAME=`uname`
 APT=`which apt`
+GLIBC=`ldd --version |  grep -m1 -o '[0-9]\.[0-9][0-9]' | head -n 1`
 if [ $ARCH = "armv7l" ]; then 
 	ARCH="armhf"
 	ARCHJ="arm"
 elif [ $ARCH = "x86_64" ]; then
 	ARCH="amd64"
 	ARCHJ="x64"
+elif [ $ARCH = "aarch64" ]; then
+	ARCH="aarch64"
+	ARCHJ="aarch64"	
+	GLIBC="2.28" #experimental
 fi
-GLIBC=`ldd --version |  grep -m1 -o '[0-9]\.[0-9][0-9]' | head -n 1`
 
 IDENTSTR=$ARCH-glibc$GLIBC-$LIBRARYVERSION
-KNOWN=("amd64-glibc2.27-0.11.2" "amd64-glibc2.28-0.11.2" "amd64-glibc2.31-0.11.2" "armhf-glibc2.28-0.11.2" "armhf-glibc2.31-0.11.2")
+KNOWN=("amd64-glibc2.27-0.11.2" "amd64-glibc2.28-0.11.2" "amd64-glibc2.31-0.11.2" "armhf-glibc2.28-0.11.2" "armhf-glibc2.31-0.11.2" "aarch64-glibc2.28-0.11.2")
 
 GETLIBS=1
 if [[ ! " ${KNOWN[*]} " =~ " ${IDENTSTR} " ]]; then
@@ -284,8 +288,9 @@ fi
 if [ "$JAVA_NATIVE" = "download" ]; then
 	echo -n "Downloading Java from adoptium..."
 	cd /opt
-	JAVA_ARC=OpenJDK17U-jdk_$ARCHJ\_linux_hotspot_17.0.1_12.tar.gz
-	wget -qN https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.1%2B12/$JAVA_ARC
+	JAVA_ARC=OpenJDK17U-jre_$ARCHJ\_linux_hotspot_17.0.4.1_1.tar.gz
+	wget -qN https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.4.1%2B1/$JAVA_ARC
+	
 	if [ -z $JAVA_ARC ]; then
 		echo "failed"
 		exit

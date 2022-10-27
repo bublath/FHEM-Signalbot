@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.11";
+my $Signalbot_VERSION="3.12";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -208,7 +208,7 @@ sub Signalbot_Set($@) {					#
 	}
 
 	#Pre-parse for " " embedded strings, except for "send" that does its own processing
-	if ( $cmd ne "send") {
+	if ( $cmd ne "send" && $cmd ne "msg") {
 		@args=parse_line(' ',0,join(" ",@args));
 	}
 
@@ -406,7 +406,7 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
-	} elsif ( $cmd eq "send" || $cmd eq "reply") {
+	} elsif ( $cmd eq "send" || $cmd eq "reply" || $cmd eq "msg") {
 		return "Usage: set ".$hash->{NAME}." send [@<Recipient1> ... @<RecipientN>] [#<GroupId1> ... #<GroupIdN>] [&<Attachment1> ... &<AttachmentN>] [<Text>]" if ( @args==0); 
 		
 		return Signalbot_prepareSend($hash,$cmd,@args);
@@ -2181,6 +2181,54 @@ sub Signalbot_getPNG(@) {
 	return;
 }
 
+#Special public routine to retrieve the uiTable from a DOIF an store the SVG into the reading of a device
+#Usage: getSVGuiTable("Device:Reading","DOIF_Device,device=source_device,val=reading");
+sub
+getSVGuiTable($$) 
+{
+	my ($device,$file) = @_;
+	my @special=split(",",$file);
+	my $sname = shift @special;
+	my $shash = $defs{$sname};
+	if ($shash->{TYPE} ne "DOIF") {
+		return "getSVGuiTable() needs to specify a valid DOIF device as first argument";
+	}
+	push @special, "svg=1";
+	my $svgdata=Signalbot_DOIFAsPng($shash,@special);
+	$svgdata='<?xml version="1.0" encoding="UTF-8"?><svg>'.$svgdata.'</svg>';
+	return $svgdata if ($device eq "");
+	my @reading=split(":",$device);
+	return "Please specifiy device:reading to store your svg" if (@reading != 2);
+	my $hash = $defs{$reading[0]};
+	#$svgdata=~s/\n//ge;
+	$svgdata=encode_utf8($svgdata);
+	readingsSingleUpdate($hash,$reading[1],$svgdata,1);
+}
+
+#Special public routine to retrieve the uiTable from a DOIF an store the SVG into a file
+#Usage: saveSVGuiTable("filename","DOIF_Device,device=source_device,val=reading");
+sub
+saveSVGuiTable($$) {
+	my ($file,$doif)= @_;
+	my @special=split(",",$doif);
+	my $sname = shift @special;
+	my $shash = $defs{$sname};
+	if ($shash->{TYPE} ne "DOIF") {
+		return "getSVGuiTable() needs to specify a valid DOIF device as first argument";
+	}
+	push @special, "svg=1";
+	my $svgdata=Signalbot_DOIFAsPng($shash,@special);
+	$svgdata='<?xml version="1.0" encoding="UTF-8"?>'.$svgdata;
+	my $fh;
+	if(!open($fh, ">", $file,)) {
+		#return undef since this is a fatal error
+		return undef;
+	}
+	print $fh $svgdata;
+	close($fh);
+	return $file;
+}
+
 sub
 Signalbot_DOIFAsPng($@)
 {
@@ -2194,7 +2242,8 @@ Signalbot_DOIFAsPng($@)
 	my $matchdev="";
 	my $matchread="";
 	my $target="uiTable";
-
+	my $svgonly=0;
+	
 	#If no further information given, take the first entry of uitables
 	if (@params == 0) {
 		$matchid=1;
@@ -2211,6 +2260,8 @@ Signalbot_DOIFAsPng($@)
 				$zoom=$val if looks_like_number($val);
 			} elsif ($cm eq "dev") {
 				$matchdev=$val;
+			} elsif ($cm eq "svg") {
+				$svgonly=$val;
 			} elsif ($cm eq "val") {
 				$matchread=$val;
 			} elsif ($cm eq "sizex") {
@@ -2262,15 +2313,24 @@ Signalbot_DOIFAsPng($@)
 	} else {
 		return "Error: uiTable format error";
 	}
-	
-	return "Error: getting converting uiTable to SVG for $cmd" if (! defined $svgdata);
-	$svgdata='<?xml version="1.0" encoding="UTF-8"?> <svg>'.$svgdata.'</svg>';
 
+	$svgdata=decode_utf8($svgdata) if !($unicodeEncoding);
+	$svgdata=~s/&#x(....)/chr(hex($1))/ge; #replace all html unicode with real characters since libsvg does not like'em
+
+	return "Error: getting converting uiTable to SVG for $cmd" if (! defined $svgdata);
+	if ($svgonly) {
+		#Remove the fixed size so ftui or any other receiver can scale it themselves
+		$svgdata =~ s/ width=\"(\d+)\" height=\"(\d+)\" style=\"width:(\d+)px; height:(\d+)px;\"//g;
+		#Add XML header with right encoding
+		return $svgdata;
+	}
+
+	$svgdata='<?xml version="1.0" encoding="UTF-8"?><svg>'.$svgdata.'</svg>';
+	
 	my $ret;
 	eval {
 		require Image::LibRSVG;
 		$rsvg = new Image::LibRSVG();
-		$svgdata=~s/&#x(....)/chr(hex($1))/ge; #replace all html unicode with real characters since libsvg does not like'em
 		if ($sizex != -1 && $sizey !=-1) {
 		$ret=$rsvg->loadFromStringAtZoomWithMax($svgdata, $zoom, $zoom, $sizex, $sizey  );
 		} else {

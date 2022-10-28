@@ -2181,21 +2181,35 @@ sub Signalbot_getPNG(@) {
 	return;
 }
 
+#Special version with one Argument for returning the SVG as String
+sub 
+getSVGuiTable($) 
+{
+	my ($arg)=@_;
+	return readSVGuiTable($arg,"");
+}	
 #Special public routine to retrieve the uiTable from a DOIF an store the SVG into the reading of a device
 #Usage: getSVGuiTable("Device:Reading","DOIF_Device,device=source_device,val=reading");
 sub
-getSVGuiTable($$) 
+readSVGuiTable($$) 
 {
-	my ($device,$file) = @_;
-	my @special=split(",",$file);
+	my ($doif,$device) = @_;
+	my @special=split(",",$doif);
 	my $sname = shift @special;
 	my $shash = $defs{$sname};
 	if ($shash->{TYPE} ne "DOIF") {
-		return "getSVGuiTable() needs to specify a valid DOIF device as first argument";
+		return "getSVGuiTable() needs to specify a valid DOIF device as first argument (found $sname)";
 	}
 	push @special, "svg=1";
 	my $svgdata=Signalbot_DOIFAsPng($shash,@special);
 	$svgdata='<?xml version="1.0" encoding="UTF-8"?><svg>'.$svgdata.'</svg>';
+	$svgdata=~/viewBox=\"(\d+) (\d+) (\d+) (\d+)\"/;
+	my $x=$1;
+	my $y=$2;
+	my $width=$3;
+	my $height=$4;
+	#$svgdata=~s/viewBox=\"(\d+) (\d+) (\d+) (\d+)\"/viewbox=\"$x $y $width $height\" transform=\"scale(2 2)\"/g;
+	
 	return $svgdata if ($device eq "");
 	my @reading=split(":",$device);
 	return "Please specifiy device:reading to store your svg" if (@reading != 2);
@@ -2209,8 +2223,9 @@ getSVGuiTable($$)
 #Usage: saveSVGuiTable("filename","DOIF_Device,device=source_device,val=reading");
 sub
 saveSVGuiTable($$) {
-	my ($file,$doif)= @_;
+	my ($doif,$file)= @_;
 	my @special=split(",",$doif);
+	return "Filename required" if (!defined $file || $file eq "");
 	my $sname = shift @special;
 	my $shash = $defs{$sname};
 	if ($shash->{TYPE} ne "DOIF") {
@@ -2224,7 +2239,8 @@ saveSVGuiTable($$) {
 		#return undef since this is a fatal error
 		return undef;
 	}
-	print $fh $svgdata;
+	#Suppress "wide character" warning that is generated if special characters are used
+	{no warnings; print $fh $svgdata; }
 	close($fh);
 	return $file;
 }

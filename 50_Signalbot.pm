@@ -65,6 +65,7 @@ use vars qw($FW_wname);
 	"getGroup"				=> "ay", #V0.10.0
 	"addDevice"				=> "s",
 	"listDevices"			=> "",
+	"unregister"			=> "",
 	"sendEndSessionMessage" => "as",		#unused
 	"sendRemoteDeleteMessage" => "xas",		#unused
 	"sendGroupRemoteDeletemessage" => "xay",#unused
@@ -180,8 +181,9 @@ sub Signalbot_Set($@) {					#
 				"updateGroup:textField ".
 				"quitGroup:textField ".
 				"joinGroup:textField " if $version <1000;
-	$sets.=		"group:widgetList,13,select,addMembers,removeMembers,addAdmins,removeAdmins,invite,create,delete,block,unblock,update,".
-				"quit,join,1,textField contact:widgetList,5,select,add,delete,block,unblock,1,textField " if $version >=1000;
+	$sets.=	"group:widgetList,13,select,addMembers,removeMembers,addAdmins,removeAdmins,invite,".
+	"create,delete,block,unblock,update,".
+	"quit,join,1,textField contact:widgetList,5,select,add,delete,block,unblock,1,textField " if $version >=1000;
 	my $sets_reg=	"link:textField ".
 					"register:textField ";
 	$sets_reg	.=	"captcha:textField " if defined ($hash->{helper}{register});
@@ -198,11 +200,12 @@ sub Signalbot_Set($@) {					#
 	
 	# Works always
 	if ( $cmd eq "reinit") {
-		my $ret = Signalbot_setup($hash);
-		$hash->{STATE} = $ret if defined $ret;
 		$hash->{helper}{qr}=undef;
 		$hash->{helper}{register}=undef;
 		$hash->{helper}{verification}=undef;
+		$hash->{helper}{captcha}=undef;
+		my $ret = Signalbot_setup($hash);
+		$hash->{STATE} = $ret if defined $ret;
 		Signalbot_createRegfiles($hash);
 		return undef;
 	}
@@ -227,11 +230,11 @@ sub Signalbot_Set($@) {					#
 		my $ret = Signalbot_setAccount($hash, $number);
 		# undef is success
 		if (!defined $ret) {
-			$ret=Signalbot_setup($hash);
-			$hash->{STATE} = $ret if defined $ret;
 			$hash->{helper}{qr}=undef;
 			$hash->{helper}{register}=undef;
 			$hash->{helper}{verification}=undef;
+			$ret=Signalbot_setup($hash);
+			$hash->{STATE} = $ret if defined $ret;
 			return undef;
 		}
 		#if some error occured, register the old account
@@ -259,24 +262,51 @@ sub Signalbot_Set($@) {					#
 	} elsif ($cmd eq "removeDevice") {
 		my $devID = shift @args;
 		return Signalbot_removeDevice($hash,$devID);
+	} elsif ( $cmd eq "unregister") {
+		my $number=ReadingsVal($name,"account","");
+		my $vernum= shift @args;
+		if ($number eq $vernum) {
+			my $ret=Signalbot_CallS($hash,"unregister");
+			#delete account and do a reinit
+			Signalbot_disconnect($hash);
+			readingsSingleUpdate($hash, 'account', "none", 0);
+			$hash->{helper}{qr}=undef;
+			$hash->{helper}{register}=undef;
+			$hash->{helper}{verification}=undef;
+			$hash->{helper}{captcha}=undef;
+			my $ret = Signalbot_setup($hash);
+			$hash->{STATE} = $ret if defined $ret;
+			Signalbot_createRegfiles($hash);
+			return undef;
+		}
+		return "To unregister provide current account for safety reasons";
 	} elsif ( $cmd eq "register") {
 		my $account= shift @args;
 		return "Number needs to start with '+' followed by digits" if !defined Signalbot_checkNumber($account);
+		delete $hash->{helper}{captcha};
 		my $ret=Signalbot_Registration($hash,$account);
 		if (!defined $ret) {
 			my $err=ReadingsVal($name,"lastError","");
+			$hash->{helper}{verification}=undef;
+			$hash->{helper}{qr}=undef;
 			$err="Captcha";
 			if ($err =~ /Captcha/) {
 				$hash->{helper}{register}=$account;
-				$hash->{helper}{verification}=undef;
-				$hash->{helper}{qr}=undef;
 				Signalbot_createRegfiles($hash);
 				return;
+			} else {
+				$hash->{helper}{register}=undef;
 			}
-		}
+		} 			
 		$hash->{helper}{verification}=$account;
 		$hash->{helper}{register}=undef;
+		if (defined $ret && $ret==-1) {
+			#Special case: registration succeeded without captcha as it just was reactivated - no verification
+			$hash->{helper}{verification}=undef;
+			$ret=Signalbot_setAccount($hash,$account);
+		}
 		return;
+		
 	} elsif ( $cmd eq "captcha" ) {
 		my $captcha=shift @args;
 		if ($captcha =~ /signalcaptcha:\/\//) {
@@ -293,6 +323,9 @@ sub Signalbot_Set($@) {					#
 					my $peer=$hash->{CL}{PEER};
 					DoTrigger($web,"JS#$peer:location.href=".'"'."?detail=$name".'"');
 					return undef;
+				} else {
+					my $err=ReadingsVal($name,"lastError","");
+					return "Error with captcha:$err";
 				}
 			}
 		}
@@ -1186,6 +1219,7 @@ sub Signalbot_setup2($@) {
 		readingsBulkUpdate($hash, 'account', "none");
 		readingsBulkUpdate($hash, 'joinedGroups', "");
 		readingsBulkUpdate($hash, 'lastError', "No account registered - use set account to connect to an existing registration, link or register to get a new account");
+		$hash->{STATE}="Disconnected";
 		readingsEndUpdate($hash, 1);
 		return undef;
 	}
@@ -1817,6 +1851,7 @@ sub Signalbot_Registration($$) {
 	if (!defined $captcha) {
 		#try without captcha (but never works nowadays)
 		$ret=Signalbot_CallS($hash,"register",$account,$method);
+		return -1 if (defined $ret)
 	} else {
 		$ret=Signalbot_CallS($hash,"registerWithCaptcha",$account,$method,$captcha);
 	}
@@ -2009,26 +2044,14 @@ sub Signalbot_Detail {
 			$ret .= "You seem to access FHEM from a Linux Desktop. Please consider to download <a href=fhem/signal/signalcaptcha.desktop download>this mine scheme<\/a> and install under ~/.local/share/applications/signalcaptcha.desktop<br>";
 			$ret .= "To activate it execute <b>xdg-mime default signalcaptcha.desktop x-scheme-handler/signalcaptcha</b> from your shell. This helps to mostly automate the registration process, however seems only to work with Firefox (not with Chromium)<br><br>";
 		}
-		$ret .= "Visit <a href=https://signalcaptchas.org/registration/generate.html>Signal Messenger Captcha Page<\/a> or <a href=https://signalcaptchas.org/challenge/generate.html>Alternative Captcha Page<\/a> and complete the potential Captcha (often you will see an empty page which means you already passed just by visiting the page).<br><br>";
+		$ret .= "Visit <a href=https://signalcaptchas.org/registration/generate.html>Signal Messenger Captcha Page<\/a> or <a href=https://signalcaptchas.org/challenge/generate.html>Alternative Captcha Page<\/a> and complete the captcha.<br><br>";
 		if ($FW_userAgent =~ /\(Windows/) {
 		$ret .= "If you applied the Windows registry hack, confirm opening Windows PowerShell and the rest will run automatically.<br><br>"
 		}
 		$ret .="If you're not using an automation option, you will then have to copy&paste the Captcha string that looks something like:<br><br>";
-		$ret .="<i>signalcaptcha://03AGdBq24NskB_KwAsS9kSY0PzRp4vKx01PZ8nGsfaTV2x548zaUy3aMqedsj..........</i><br><br>";
-		$ret .="To do this you typically need to open the Developer Tools (F12) and reload the Captcha.<br><br>";
-		if ($FW_userAgent =~ /Chrome/ ) {
-		$ret .="You seem to use a Chrome compatible browser. Now find the 'Network' tab, then the line with the Status=(canceled)<br>";
-		$ret .="If you move over the Name column you will see that it actually starts with signalcaptcha://<br>";
-		$ret .="Right click and chose Copy->Link Adress<br>";
-		$ret .="Return here and use <b>set captcha</b> to paste it and continue registration.<br><br>";
-		$ret .='<img src="https://svn.fhem.de/fhem/trunk/fhem/contrib/signal/chrome-x11-snapshot.png"><br>';
-		}
-		if ($FW_userAgent =~ /Firefox/ ) {
-		$ret .="You seem to use Firefox. Here find the 'Console' tab. You should see a 'prevented navigation' entry.<br>";
-		$ret .="Copy&Paste the signalcaptcha:// string (between quotes).<br>";
-		$ret .="Return here and use <b>set captcha</b> to paste it and continue registration.<br><br>";
-		$ret .='<img src="https://svn.fhem.de/fhem/trunk/fhem/contrib/signal/firefox-x11-snapshot.png"><br>';
-		}
+		$ret .="<i>signalcaptcha://signal-recaptcha-v2.6LfBXs0bAAAAAAjkDyyI1Lk5gBAUWfhI_bIyox5W.challenge.03AEkXO..........</i><br><br>";
+		$ret .="After solving the captcha you will see a link below the captcha like 'open Signal'. Copy that link adress and<br><br>";
+		$ret .="return here to use <b>set captcha</b> to paste it and continue registration.<br><br>";
 	}
 
 	if (defined $verification) {
@@ -2206,9 +2229,11 @@ readSVGuiTable($$)
 	$svgdata=~/viewBox=\"(\d+) (\d+) (\d+) (\d+)\"/;
 	my $x=$1;
 	my $y=$2;
-	my $width=$3;
-	my $height=$4;
-	#$svgdata=~s/viewBox=\"(\d+) (\d+) (\d+) (\d+)\"/viewbox=\"$x $y $width $height\" transform=\"scale(2 2)\"/g;
+	my $width=$3/2;
+	my $height=$4/2;
+	my $w=$3*2;
+	my $h=$4*2;
+	#$svgdata=~s/viewBox=\"(\d+) (\d+) (\d+) (\d+)\"/viewbox=\"$x $y $width $height\" width=\"$w\" height=\"$h\"/g;
 	
 	return $svgdata if ($device eq "");
 	my @reading=split(":",$device);

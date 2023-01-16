@@ -1079,6 +1079,7 @@ sub Signalbot_disconnect($@) {
 		delete $hash->{FD};
 		$selectlist{"$name.dbus"} = undef;
 		$hash->{STATE}="Disconnected";
+		readingsSingleUpdate($hash, 'state', "disconnected",1);
 	}; 
 	if ($@) {
 		Log3 $name, 4, "Error in disconnect:".$@;
@@ -1101,6 +1102,7 @@ sub Signalbot_setup($@){
 	if (!defined $dbus) {
 		Log3 $name, 3, $hash->{NAME}.": Error while initializing Dbus";
 		$hash->{helper}{dbus}=undef;
+		readingsSingleUpdate($hash, 'state', "unavailable",1);
 		return "Error setting up DBUS - is Protocol::Dbus installed?";
 	}
 	$hash->{helper}{dbus}=$dbus;
@@ -1110,6 +1112,7 @@ sub Signalbot_setup($@){
 	if (!defined $dbus2) {
 		Log3 $name, 3, $hash->{NAME}.": Error while initializing Dbus";
 		$hash->{helper}{dbuss}=undef;
+		readingsSingleUpdate($hash, 'state', "unavailable",1);
 		return "Error setting up DBUS - is Protocol::Dbus installed?";
 	}
 	$hash->{helper}{dbuss}=$dbus2;
@@ -1204,6 +1207,7 @@ sub Signalbot_setup2($@) {
 		],
 		);	
 	$hash->{STATE}="Connected to $signalpath";
+	readingsSingleUpdate($hash, 'state', $hash->{STATE},1);
 
 	#-u Mode or already registered
 	if ($num<0 || $account ne "none") {
@@ -1220,6 +1224,7 @@ sub Signalbot_setup2($@) {
 		readingsBulkUpdate($hash, 'joinedGroups', "");
 		readingsBulkUpdate($hash, 'lastError', "No account registered - use set account to connect to an existing registration, link or register to get a new account");
 		$hash->{STATE}="Disconnected";
+		readingsBulkupdate($hash, 'state', "disconnected");
 		readingsEndUpdate($hash, 1);
 		return undef;
 	}
@@ -1949,6 +1954,7 @@ sub Signalbot_Init($$) {				#
 	if (defined $DBus_missing) {
 		$hash->{STATE} ="Please make sure that Protocol::DBus is installed, e.g. by 'sudo cpan install Protocol::DBus'";
 		Log3 $hash->{NAME}, 2, $hash->{NAME}.": Init: $hash->{STATE}";
+		readingsSingleUpdate($hash, 'state', "unavailable",1);
 		return $hash->{STATE};
 	}
 	Log3 $hash->{NAME}, 4, $hash->{NAME}.": Protocol::DBus version found ".$Protocol::DBus::VERSION;
@@ -1965,10 +1971,7 @@ sub Signalbot_Init($$) {				#
 	Signalbot_Set($hash, $name, "setfromreading");
 	my $account=ReadingsVal($name,"account","none");
 	if ($account eq "none") {$account=$a[0]};
-	my $ret = Signalbot_setPath($hash,$account);
-	$hash->{STATE} = $ret if defined $ret;
-	return $ret if defined $ret;
-	return;
+	return Signalbot_setPath($hash,$account);
 }
 
 sub Signalbot_fetchFile($$$$) {
@@ -2105,7 +2108,6 @@ sub Signalbot_State($$$$) {			#reload readings at FHEM start
 sub Signalbot_Undef($$) {				#
 	my ($hash, $name) = @_;
 	Signalbot_disconnect($hash);
-	$hash->{STATE}="Disconnected";
 	return undef;
 }
 

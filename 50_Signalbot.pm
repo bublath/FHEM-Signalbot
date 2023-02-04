@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.12";
+my $Signalbot_VERSION="3.13";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -1151,7 +1151,7 @@ sub Signalbot_setup2($@) {
 	}
 	my $version=Signalbot_CallS($hash,"version");
 	my $account=ReadingsVal($name,"account","none");
-	if (!defined $version) {
+	if (!defined $version || ($version =~ /\d+\.\d+\.\d+/) == 0){
 		if ($Signalbot_Retry<3) {
 			$Signalbot_Retry++;
 			InternalTimer(gettimeofday() + 10, 'Signalbot_setup', $hash, 0);
@@ -2002,6 +2002,11 @@ sub Signalbot_Detail {
 	if (defined $DBus_missing) {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}
+
+	if ($state eq "unavailable") {
+		return "Dbus could not be initialized, please validate your Linux installation<br><br>";
+	}
+
 	my $multi=$hash->{helper}{multi};
 	my $version=$hash->{helper}{version};
 	$multi=0 if !defined $multi;
@@ -2014,7 +2019,7 @@ sub Signalbot_Detail {
 		$ret .= "Signal-cli is running in single-mode, please consider starting it without -u parameter (e.g. by re-running the installer)<br>";
 	}
 	if($version<1100 || $multi==0) {
-		$ret .= '<br>You can download the installer <a href="www/signal/signal_install.sh" download>here</a> or your www/signal directory and run it with<br><b>sudo ./signal_install.sh</b><br><br>';
+		$ret .= '<br>You can download the installer <a href="fhem/www/signal/signal_install.sh" download>here</a> or your www/signal directory and run it with<br><b>sudo ./signal_install.sh</b><br><br>';
 	}
 	return $ret if ($hash->{helper}{version}<1100);
 	

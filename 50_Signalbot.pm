@@ -2003,7 +2003,7 @@ sub Signalbot_Detail {
 		return "Perl module Protocol:DBus not found, please install with<br><b>sudo cpan install Protocol::DBus</b><br> and restart FHEM<br><br>";
 	}
 
-	if ($state eq "unavailable") {
+	if (ReadingsVal($name,"state",0) eq "unavailable") {
 		return "Dbus could not be initialized, please validate your Linux installation<br><br>";
 	}
 

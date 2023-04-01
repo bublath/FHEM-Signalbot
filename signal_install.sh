@@ -172,9 +172,15 @@ elif [ $ARCH = "x86_64" ]; then
 	ARCH="amd64"
 	ARCHJ="x64"
 elif [ $ARCH = "aarch64" ]; then
-	ARCH="aarch64"
-	ARCHJ="aarch64"	
-	GLIBC="2.28" #experimental
+	BITS=`getconf LONG_BIT`
+	if [ "$BITS" = "64" ]; then
+		ARCH="aarch64"
+		ARCHJ="aarch64"	
+		GLIBC="2.28" #experimental
+	else 
+		ARCH="armhf"
+		ARCHJ="arm"
+	fi
 fi
 
 IDENTSTR=$ARCH-glibc$GLIBC-$LIBRARYVERSION

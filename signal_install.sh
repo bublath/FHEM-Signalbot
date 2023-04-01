@@ -1,6 +1,6 @@
 #!/bin/bash
 #$Id:$
-SCRIPTVERSION="3.14"
+SCRIPTVERSION="3.15"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 

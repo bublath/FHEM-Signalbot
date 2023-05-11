@@ -220,7 +220,7 @@ sub Signalbot_Set($@) {					#
 		my @cm=split(",",$args[0]);
 		$cmd=$cmd.$cm[0];
 		$args[0]=$cm[1];
-		print "$cmd ".join(":",@args)."\n";
+		LogUnicode $hash->{NAME}, 3, $hash->{NAME}.": $cmd ".join(":",@args);
 	}
 	
 	if ( $cmd eq "signalAccount" ) {
@@ -364,7 +364,9 @@ sub Signalbot_Set($@) {					#
 		my $number=Signalbot_translateContact($hash,$nickname);
 		return "Unknown contact" if !defined $number;
 		delete $hash->{helper}{contacts}{$number} if defined $hash->{helper}{contacts}{$number};
+		Signalbot_CallA($hash,"deleteContact",$number);
 		Signalbot_CallA($hash,"deleteRecipient",$number);
+		delete $hash->{helper}{contacts}{$number};
 		return;
 	} elsif ( $cmd eq "deleteGroup" || $cmd eq "groupdelete") {
 		return "Usage: set ".$hash->{NAME}." deleteGroup <groupname>" if (@args<1);

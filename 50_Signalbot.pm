@@ -1054,7 +1054,7 @@ sub Signalbot_ReceiptReceived {
 	readingsBeginUpdate($hash);
 	readingsBulkUpdate($hash, "sentMsgRecipient", $sender);
 	readingsBulkUpdate($hash, 'sentMsgTimestamp', strftime("%d-%m-%Y %H:%M:%S", localtime($timestamp/1000)));
-	readingsEndUpdate($hash, 0);
+	readingsEndUpdate($hash, 1);
 }
 
 sub Signalbot_SyncMessageReceived {
@@ -1678,7 +1678,7 @@ sub Signalbot_sendMessage($@) {
 	readingsBeginUpdate($hash);
 	readingsBulkUpdate($hash, "sentMsg", $mes);
 	readingsBulkUpdate($hash, 'sentMsgTimestamp', "pending");
-	readingsEndUpdate($hash, 0);
+	readingsEndUpdate($hash, 1);
 	Signalbot_CallA($hash,"sendMessage",$mes,\@attach,\@recipient); 
 }
 
@@ -1717,7 +1717,7 @@ sub Signalbot_sendGroupMessage($@) {
 	readingsBeginUpdate($hash);
 	readingsBulkUpdate($hash, "sentMsg", $mes);
 	readingsBulkUpdate($hash, 'sentMsgTimestamp', "pending");
-	readingsEndUpdate($hash, 0);
+	readingsEndUpdate($hash, 1);
 
 	Signalbot_CallA($hash,"sendGroupMessage",$mes,\@attach,\@arr); 
 }

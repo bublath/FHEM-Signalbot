@@ -1425,7 +1425,12 @@ sub Signalbot_Read($@){
 	my $counter=5;
 	while (defined $msg || $counter>0) {
 		$dbus->blocking(0);
-		$msg = $dbus->get_message();
+		$msg = eval{$dbus->get_message()};
+		if ($@) { 
+			# This is fatal reinitialize
+			Signalbot_setup($hash); 
+			return; 
+		}
 		if ($msg) {
 			#Signal handling
 			my $callback = $msg->get_header('MEMBER');

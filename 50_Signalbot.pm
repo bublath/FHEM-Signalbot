@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.13";
+my $Signalbot_VERSION="3.14";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -23,6 +23,7 @@ use Encode;
 use Time::HiRes qw( usleep );
 use URI::Escape;
 use HttpUtils;
+use MIME::Base64;
 
 eval "use Protocol::DBus;1";
 eval "use Protocol::DBus::Client;1" or my $DBus_missing = "yes";
@@ -63,8 +64,10 @@ use vars qw($FW_wname);
 	"setPin"				=> "s", #V0.10.0
 	"removePin"				=> "", #V0.10.0
 	"getGroup"				=> "ay", #V0.10.0
+	"getIdentity"			=> "s", #V0.11.12
 	"addDevice"				=> "s",
 	"listDevices"			=> "",
+	"listIdentities"		=> "", #V0.11.12
 	"unregister"			=> "",
 	"sendEndSessionMessage" => "as",		#unused
 	"sendRemoteDeleteMessage" => "xas",		#unused
@@ -81,6 +84,12 @@ use vars qw($FW_wname);
 	"quitGroup"				=> "",
 	"addAdmins"				=> "as",
 	"removeAdmins"			=> "as",
+);
+
+my %identitysignatures = (
+	#methods in the "Identities" object from V0.11.12
+	"trust"					=> "",
+	"trustVerified"			=> "s",	
 );
 
 #dbus interfaces that only exist in registration mode
@@ -115,6 +124,7 @@ sub Signalbot_Initialize($) {
   $hash->{createGroup}  = "Signalbot_UpdateGroup_cb";
   $hash->{joinGroup}	= "Signalbot_UpdateGroup_cb";
   $hash->{listNumbers}	= "Signalbot_ListNumbers_cb";
+  $hash->{listIdentities}	= "Signalbot_ListIdentities_cb";
   $hash->{AttrList}  = 	"IODev do_not_notify:1,0 ignore:1,0 showtime:1,0 ".
 												"defaultPeer: ".
 												"allowedPeer ".
@@ -123,6 +133,7 @@ sub Signalbot_Initialize($) {
 												"babbleExclude ".
 												"authTimeout ".
 												"authDev ".
+												"authTrusted:yes,no ".
 												"cmdKeyword ".
 												"cmdFavorite ".
 												"favorites:textField-long ".
@@ -181,6 +192,22 @@ sub Signalbot_Set($@) {					#
 				"updateGroup:textField ".
 				"quitGroup:textField ".
 				"joinGroup:textField " if $version <1000;
+	if ($version>=1111) {
+		my $ident_t="";
+		my $idcnt_t=1;
+		my $ident_u="";
+		foreach my $ids (keys %{$hash->{helper}{identities}}) {
+			if ($hash->{helper}{identities}{$ids}{TrustLevel} ne "TRUSTED_VERIFIED") {
+				$ident_t.= ",".$ids;
+				$idcnt_t++;
+			}
+			if ($hash->{helper}{identities}{$ids}{TrustLevel} eq "UNTRUSTED") {
+				$ident_u.= ",".$ids;
+			}
+		}
+		$sets.=	"trustVerified:widgetList,".$idcnt_t.",select".$ident_t.",1,textField ";
+		$sets.=	"trust:all".$ident_u." ";
+	}
 	$sets.=	"group:widgetList,13,select,addMembers,removeMembers,addAdmins,removeAdmins,invite,".
 	"create,delete,block,unblock,update,".
 	"quit,join,1,textField contact:widgetList,5,select,add,delete,block,unblock,1,textField " if $version >=1000;
@@ -200,10 +227,6 @@ sub Signalbot_Set($@) {					#
 	
 	# Works always
 	if ( $cmd eq "reinit") {
-		$hash->{helper}{qr}=undef;
-		$hash->{helper}{register}=undef;
-		$hash->{helper}{verification}=undef;
-		$hash->{helper}{captcha}=undef;
 		my $ret = Signalbot_setup($hash);
 		$hash->{STATE} = $ret if defined $ret;
 		Signalbot_createRegfiles($hash);
@@ -230,9 +253,6 @@ sub Signalbot_Set($@) {					#
 		my $ret = Signalbot_setAccount($hash, $number);
 		# undef is success
 		if (!defined $ret) {
-			$hash->{helper}{qr}=undef;
-			$hash->{helper}{register}=undef;
-			$hash->{helper}{verification}=undef;
 			$ret=Signalbot_setup($hash);
 			$hash->{STATE} = $ret if defined $ret;
 			return undef;
@@ -270,10 +290,6 @@ sub Signalbot_Set($@) {					#
 			#delete account and do a reinit
 			Signalbot_disconnect($hash);
 			readingsSingleUpdate($hash, 'account', "none", 0);
-			$hash->{helper}{qr}=undef;
-			$hash->{helper}{register}=undef;
-			$hash->{helper}{verification}=undef;
-			$hash->{helper}{captcha}=undef;
 			$ret = Signalbot_setup($hash);
 			$hash->{STATE} = $ret if defined $ret;
 			Signalbot_createRegfiles($hash);
@@ -441,6 +457,15 @@ sub Signalbot_Set($@) {					#
 			return $ret if defined $ret;
 		}
 		return undef;
+	} elsif ( $cmd eq "trust" ) {
+		my $number = shift @args;
+		return "not implemented" if $number eq "all";
+		my $ret=Signalbot_CallSI($hash,"trust",$number);
+		return $ret;
+	} elsif ( $cmd eq "trustVerified") {
+		my @cm = split(",",$args[0]);
+		my $ret=Signalbot_CallSI($hash,"trustVerified",$cm[0],$cm[1]);
+		return $ret;
 	} elsif ( $cmd eq "send" || $cmd eq "reply" || $cmd eq "msg") {
 		return "Usage: set ".$hash->{NAME}." send [@<Recipient1> ... @<RecipientN>] [#<GroupId1> ... #<GroupIdN>] [&<Attachment1> ... &<AttachmentN>] [<Text>]" if ( @args==0); 
 		
@@ -604,6 +629,24 @@ sub Signalbot_Get($@) {
 		$gets.="contacts:all,nonblocked ".
 			"groups:all,active,nonblocked devices:noArg " if $account ne "none";
 		$gets .="groupProperties:textField " if $version >= 1000;
+
+		if ($version>=1111) {
+			my $ident_t="";
+			my $idcnt_t=0;
+			foreach my $number (keys %{$hash->{helper}{identities}}) {
+				$ident_t.="," if $idcnt_t>0;
+				$ident_t.= $number;
+				if (exists $hash->{helper}{contacts}{$number}) {
+					my $cname=$hash->{helper}{contacts}{$number} ne ""?$hash->{helper}{contacts}{$number}:"Unknown";
+					$ident_t.="($cname)";
+				}
+				$idcnt_t++; 
+			}
+
+			$ident_t=$ident_t=~s/ /_/gr;
+			$gets.=	"identityDetails:".($idcnt_t<20?$ident_t:"textField")." ";
+			print $gets."\n";
+		}
 		return "Signalbot_Get: Unknown argument $cmd, choose one of ".$gets;
 	}
 	
@@ -630,6 +673,45 @@ sub Signalbot_Get($@) {
 				$devname="main device";
 			}
 			$str.=sprintf("%2i %s\n",$devid,$devname);
+		}
+	return $str;
+	} elsif ($cmd eq "identityDetails") {
+		$arg=~/(^.*)(\(.*\)$)/;
+		my $number;
+		if ($1) {
+			$number=$1;
+		} else {
+			$number=$arg;
+		}
+		my $str="Details for $number\n\n";
+		if ($number =~ /^\+[1-9][0-9]{5,}$/) {
+			my $contact=Signalbot_getContactName($hash,$number);
+			my $path=Signalbot_getIdentityPath($hash,$number);
+			return "Unknown identity ".$number if !defined $path;
+			my $ret=Signalbot_getIdentityProperties($hash,$path);
+			if (defined $ret) {
+				my %props=%$ret;
+				$str.="Contact Name            :".$contact."\n";
+				$str.="Trust Level             :".$props{TrustLevel}."\n";
+				$str.="Safety Number           :".$props{SafetyNumber}."\n";
+				#Don't display as it is very long and not sure what it's used for anyway
+				my $fp=$props{Fingerprint};
+				#$str.="Fingerprint             :".join(" ",@$fp)."\n";
+				#$str.="Added date              :". strftime("%d-%m-%Y %H:%M:%S", localtime($props{AddedDate}/1000))."\n";
+				my $sf=$props{ScannableSafetyNumber};
+				my $cstr=pack("C*",@$sf);
+				my $fn=Signalbot_copyToFile($cstr,"dat");
+				unlink "www/signal/qr.png";
+				my $ret=qx(qrencode -r $fn -o www/signal/qr.png);
+				unlink $fn;
+				if (-e "www/signal/qr.png") {
+					$str.="Scannable Safety Number to validate FHEM from Mobile:\n";
+					my $qr_url .= "fhem/signal/qr.png?".gettimeofday(); #adding timestamp to prevent image caching by the browser
+					$str .= "<a href=\"$qr_url\"><img src=\"$qr_url\"><\/a><br>";
+				} else {
+					$str.="Could not generate QR Code. Check if qrencode is installed.\n".$ret."\n";
+				}
+			}
 		}
 	return $str;
 	} elsif ($cmd eq "favorites") {
@@ -754,38 +836,48 @@ sub Signalbot_command($@){
 	return $message if $timeout==0;
 	my $cmd=AttrVal($hash->{NAME},"cmdKeyword",undef);
 	return $message unless defined $cmd;
+	my $trust=0;
+	if (exists $hash->{helper}{identities}{$sender} and exists $hash->{helper}{identities}{$sender}{TrustLevel} and 
+	    $hash->{helper}{identities}{$sender}{TrustLevel} eq "TRUSTED_VERIFIED" and AttrVal($hash->{NAME},"authTrusted","no") eq "yes") {
+		$trust=1;
+		LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": $sender is trusted";
+	} else {
+		LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": $sender is not trusted";
+	}
 	my @arr=();
 	if ($message =~ /^$cmd(.*)/) {
 		$cmd=$1;
 		LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Command received:$cmd";
 		my $device=AttrVal($hash->{NAME},"authDev",undef);
-		if (!defined $device) {
+		if (!defined $device and $trust==0) {
 			readingsSingleUpdate($hash, 'lastError', "Missing GoogleAuth device in authDev to execute remote command",1);
 			return $message;
 		}
 		my @cc=split(" ",$cmd);
 		if ($cc[0] =~ /^\d+$/) {
-			#This could be a token
-			my $token=shift @cc;
 			my $restcmd=join(" ",@cc);
-			my $ret = gAuth($device,$token);
-			if ($ret == 1) {
-				LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Token valid for sender $sender for $timeout seconds";
-				$hash->{helper}{auth}{$sender}=1;
-				#Remove potential old timer so countdown start from scratch
-				RemoveInternalTimer("$hash->{NAME} $sender");
-				InternalTimer(gettimeofday() + $timeout, 'Signalbot_authTimeout', "$hash->{NAME} $sender", 0);
-				Signalbot_sendMessage($hash,$sender,"","You have control for ".$timeout."s");
-				$cmd=$restcmd;
-			} else {
-				LogUnicode $hash->{NAME}, 3, $hash->{NAME}.": Invalid token sent by $sender";
-				$hash->{helper}{auth}{$sender}=0;
-				Signalbot_sendMessage($hash,$sender,"","Invalid token");
-				LogUnicode $hash->{NAME}, 2, $hash->{NAME}.": Invalid token sent by $sender:$message";
-				return $cmd;
+			if ($trust == 0) {
+				#This could be a token
+				my $token=shift @cc;
+				my $ret = gAuth($device,$token);
+				if ($ret == 1) {
+					LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Token valid for sender $sender for $timeout seconds";
+					$hash->{helper}{auth}{$sender}=1;
+					#Remove potential old timer so countdown start from scratch
+					RemoveInternalTimer("$hash->{NAME} $sender");
+					InternalTimer(gettimeofday() + $timeout, 'Signalbot_authTimeout', "$hash->{NAME} $sender", 0);
+					Signalbot_sendMessage($hash,$sender,"","You have control for ".$timeout."s");
+					$cmd=$restcmd;
+				} else {
+					LogUnicode $hash->{NAME}, 3, $hash->{NAME}.": Invalid token sent by $sender";
+					$hash->{helper}{auth}{$sender}=0;
+					Signalbot_sendMessage($hash,$sender,"","Invalid token");
+					LogUnicode $hash->{NAME}, 2, $hash->{NAME}.": Invalid token sent by $sender:$message";
+					return $cmd;
+				}
 			}
 		}
-		my $auth=0;
+		my $auth=$trust;
 		if (defined $hash->{helper}{auth}{$sender} && $hash->{helper}{auth}{$sender}==1) {
 			$auth=1;
 		}
@@ -1099,7 +1191,12 @@ sub Signalbot_setup($@){
 	}
 	#Clear error on init to avoid confusion with old erros
 	readingsSingleUpdate($hash, 'lastError', "ok",0);
-	delete $hash->{helper}{contacts};
+	$hash->{helper}{contacts}=undef;
+	$hash->{helper}{qr}=undef;
+	$hash->{helper}{register}=undef;
+	$hash->{helper}{verification}=undef;
+	$hash->{helper}{captcha}=undef;
+
 	my $dbus = Protocol::DBus::Client::system();
 	if (!defined $dbus) {
 		Log3 $name, 3, $hash->{NAME}.": Error while initializing Dbus";
@@ -1141,6 +1238,7 @@ sub Signalbot_setup2($@) {
 	}
 	if (!$dbus->initialize()) { $dbus->init_pending_send(); return; }
 	$hash->{helper}{init}=1;
+	delete $hash->{helper}{identities};
 	
 	#Restore contactlist into internal hash
 	my $clist=ReadingsVal($hash->{NAME}, "contactList",undef);
@@ -1214,6 +1312,7 @@ sub Signalbot_setup2($@) {
 	#-u Mode or already registered
 	if ($num<0 || $account ne "none") {
 		Signalbot_CallA($hash,"listNumbers");
+		Signalbot_CallA($hash,"listIdentities") if $version>=1111;
 		#Might make sense to call refreshGroups here, however, that is a sync call and might potentially take longer, so maybe no good idea in startup
 		readingsBeginUpdate($hash);
 		readingsBulkUpdate($hash, 'account', $account) if defined $account;
@@ -1244,6 +1343,25 @@ sub Signalbot_ListNumbers_cb($@) {
 	my @numbers=@$rec;
 	foreach (@numbers) {
 		my $contact=Signalbot_getContactName($hash,$_);
+	}
+}
+
+#Async Callback after getting list of Numbers, results will also be filled asynchronous
+sub Signalbot_ListIdentities_cb($@) {
+	my ($hash,$rec) = @_;
+	return if !defined $rec or $rec ==0;
+	foreach my $ident (@$rec) {
+		my ($idpath,$uuid,$number)=@$ident;
+		#Only for valid numbers - ignore numbers that only have uuids to avoid an error
+		if ($number =~ /^\+[1-9][0-9]{5,}$/) {
+			my $ret=Signalbot_getIdentityProperties($hash,$idpath);
+			if (defined $ret) {
+				my %props=%$ret;
+				my $level=$props{TrustLevel};
+				$hash->{helper}{identities}{$number}{TrustLevel}=$props{TrustLevel};
+				$hash->{helper}{identities}{$number}{SafetyNumber}=$props{SafetyNumber};
+			}
+		}
 	}
 }
 
@@ -1278,6 +1396,17 @@ sub	Signalbot_CallSG($@) {
 	return Signalbot_CallDbus($hash,1,$path,$function,$prototype,'org.asamk.Signal',@args);
 }
 
+#sync, identity
+sub	Signalbot_CallSI($@) { 
+	my ($hash,$function,$identity,@args) = @_;
+	print "Calling $function for $identity with";
+	my $prototype=$identitysignatures{$function};
+	my $path=Signalbot_getIdentityPath($hash,$identity);
+	return if !defined $path;
+	LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Calling $function($prototype) $path Args:$args[0]";
+	return Signalbot_CallDbus($hash,1,$path,$function,$prototype,'org.asamk.Signal',@args);
+}
+
 #all group properties
 sub	Signalbot_getGroupProperties($@) { 
 	my ($hash,$group) = @_;
@@ -1285,6 +1414,14 @@ sub	Signalbot_getGroupProperties($@) {
 	my $path=Signalbot_getGroupPath($hash,$group);
 	return if !defined $path;
 	return Signalbot_CallDbus($hash,1,$path,'GetAll',$prototype,'org.freedesktop.DBus.Properties','org.asamk.Signal.Group');
+}
+
+#all identity properties by path
+sub	Signalbot_getIdentityProperties($@) { 
+	my ($hash,$path) = @_;
+	my $prototype="s";
+	return if !defined $path;
+	return Signalbot_CallDbus($hash,1,$path,'GetAll',$prototype,'org.freedesktop.DBus.Properties','org.asamk.Signal.Identity');
 }
 
 sub Signalbot_removeDevice($@) {
@@ -1326,9 +1463,9 @@ sub Signalbot_CallDbus($@) {
 	) ->then ( sub () {
 			$got_response = 1;
 			return if $sync; # Synchronous mode, handling of return data in main loop
-
 			#Only for asynchronous case:
 			my $msg = shift;
+
 			my $sig = $msg->get_header('SIGNATURE');
 			if (!defined $sig) {
 				#Empty signature is probably a reply from a function without return data, nothing to do
@@ -1350,6 +1487,10 @@ sub Signalbot_CallDbus($@) {
 				readingsSingleUpdate($hash, 'lastError', $hash->{helper}{lasterr},1);
 				return;
 			}
+			
+			if (!(ref $msg eq ref {})) { 
+				return; 
+			}
 			my $sig = $msg->get_header('SIGNATURE');
 			if (!defined $sig) {
 				$hash->{helper}{lasterr}="Error in $function: message without signature";
@@ -1370,7 +1511,6 @@ sub Signalbot_CallDbus($@) {
 	while ($counter>0) {
 		$dbus->blocking(1);
 		my $msg=$dbus->get_message();
-		#print Dumper($msg);
 		if (defined $msg) {
 			my $sig = $msg->get_header('SIGNATURE');
 			if (!defined $sig) {
@@ -1406,6 +1546,18 @@ sub Signalbot_getGroupPath($@) {
 	my $path=Signalbot_CallS($hash,"getGroup",\@arr);
 	return "Cannot access group $group" if !defined $path;
 	LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Group Dbus Path=".$path;
+	if (! ($path =~ /^\//)) {
+		$hash->{helper}{lasterr}=$path;
+		return undef;
+	}
+	return $path
+}
+
+sub Signalbot_getIdentityPath($@) {
+	my ($hash,$identity) = @_;
+	my $path=Signalbot_CallS($hash,"getIdentity",$identity);
+	return if !defined $path;
+	LogUnicode $hash->{NAME}, 5, $hash->{NAME}.": Identity Dbus Path=".$path;
 	if (! ($path =~ /^\//)) {
 		$hash->{helper}{lasterr}=$path;
 		return undef;
@@ -2630,6 +2782,15 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<li>block/unblock &ltcontact&gt : block/unblock receiving messages from contact</li>
 		</ul>
 		</li>
+		<li><b>set trust &ltnumber|all&gt</b><br>
+		<a id="Signalbot-set-trust"></a>
+		Set the unverified trust for a number. Specifying all will set it for all known contacts<br>
+		</li>		
+		<li><b>set trustVerified &ltnumber&gt &ltsafetynumber&gt</b><br>
+		<a id="Signalbot-set-trustVerified"></a>
+		Set the verified trust for a number. You can get the safetynumber via "get identityDetails" though the safest way is to ask your contact to send you
+		the number via a safe channel and use that one.<br>
+		</li>		
 		<br>
 	</ul>
 	
@@ -2663,9 +2824,14 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			Opens a cheat sheet for all supported replacements to format text or add emoticons using html-like tags or markdown.<br>
 			<b>Note:</b> This functionality needs to be enabled using the "formatting" attribute.<br>
 		</li>
-		<li><b>get groupPropertiese &ltgroup&gt</b><br>
-			<a id="Signalbot-get-groupPropertiese"></a>
+		<li><b>get groupProperties &ltgroup&gt</b><br>
+			<a id="Signalbot-get-groupProperties"></a>
 			Shows all known properties of the given group, like members, admins and permissions.
+		</li>
+		<li><b>get identityDetails &ltgroup&gt</b><br>
+			<a id="Signalbot-get-identityDetails"></a>
+			Shows all known details of a contacts identity.<br>
+			This includes the safetynumber for verification purposes.
 		</li>
 		<br>
 	</ul>
@@ -2687,6 +2853,10 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 		<li><b>authDev</b><br>
 		<a id="Signalbot-attr-authDev"></a>
 			Name of GoogleAuth device. Will normally be automatically filled when setting an authTimeout or cmdKeyword if a GoogleAuth device is already existing.<br>
+		</li>
+		<li><b>authTrusted yes|no</b><br>
+		<a id="Signalbot-attr-authTrusted"></a>
+			Do not require GoogleAuth for TRUSTED_VERIFIED contacts (see "set trustedVerified") if set to "yes".<br>
 		</li>
 		<li><b>autoJoin no|yes</b><br>
 		<a id="Signalbot-attr-autoJoin"></a>

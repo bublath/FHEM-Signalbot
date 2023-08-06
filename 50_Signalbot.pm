@@ -628,8 +628,18 @@ sub Signalbot_Get($@) {
 		my $gets="favorites:noArg accounts:noArg helpUnicode:noArg ";
 		$gets.="contacts:all,nonblocked ".
 			"groups:all,active,nonblocked devices:noArg " if $account ne "none";
-		$gets .="groupProperties:textField " if $version >= 1000;
-
+#		$gets .="groupProperties:textField " if $version >= 1000;
+		my $group_t="";
+		my $grcnt_t=0;
+		foreach my $group (keys %{$hash->{helper}{groups}}) {
+			$group_t.="," if $grcnt_t>0;
+			$group_t.=$hash->{helper}{groups}{$group}{name};
+			$grcnt_t++;
+		}
+		if ($grcnt_t>0) {
+			$group_t=$group_t=~s/ /&nbsp;/gr;
+			$gets.=	"groupProperties:".($grcnt_t<20?$group_t:"textField")." ";
+		}
 		if ($version>=1111) {
 			my $ident_t="";
 			my $idcnt_t=0;
@@ -645,7 +655,6 @@ sub Signalbot_Get($@) {
 
 			$ident_t=$ident_t=~s/ /_/gr;
 			$gets.=	"identityDetails:".($idcnt_t<20?$ident_t:"textField")." ";
-			print $gets."\n";
 		}
 		return "Signalbot_Get: Unknown argument $cmd, choose one of ".$gets;
 	}
@@ -794,6 +803,8 @@ sub Signalbot_Get($@) {
 		return $ret;
 	} elsif ($cmd eq "groupProperties") {
 		return if $version<1000;
+		$arg=decode_utf8($arg); #required to fully replace &nbsp
+		$arg=~s/$&\x{00a0}/ /g; #Restore normal spaces
 		my $ret=Signalbot_getGroupProperties($hash,$arg);
 		return "Error:".$hash->{helper}{lasterr} if !defined $ret;
 		my %props=%$ret;

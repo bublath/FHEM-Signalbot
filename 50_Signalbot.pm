@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.14";
+my $Signalbot_VERSION="3.15";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -595,11 +595,15 @@ sub Signalbot_prepareSend($@) {
 	#Send message to individuals (bulk)
 	if (@recipients > 0) {
 		$ret=Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
+		foreach my $sender (@recipients) {
+			Signalbot_AddToChat($hash,"Me",$sender,"",$message);
+		}
 	}
 	if (@groups > 0) {
 	#Send message to groups (one at time)
 		while(my $currgroup = shift @groups){
 			$ret=Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);
+			Signalbot_AddToChat($hash,"Me","",$currgroup,$message);
 		}
 	}
 	#Remember temp files
@@ -628,7 +632,19 @@ sub Signalbot_Get($@) {
 		my $gets="favorites:noArg accounts:noArg helpUnicode:noArg ";
 		$gets.="contacts:all,nonblocked ".
 			"groups:all,active,nonblocked devices:noArg " if $account ne "none";
-#		$gets .="groupProperties:textField " if $version >= 1000;
+		
+		my $chat_t="";
+		my $chat_cnt=0;
+		foreach my $chat (keys %{$hash->{helper}{chat}}) {
+			$chat_t.="," if $chat_cnt>0;
+			$chat_t.=$chat;
+			$chat_cnt++;
+		}			
+		if ($chat_cnt>0) {
+			$chat_t=~s/ /&nbsp;/g;
+			$gets.=	"chat:".($chat_cnt<20?$chat_t:"textField")." ";
+		}		
+
 		my $group_t="";
 		my $grcnt_t=0;
 		foreach my $group (keys %{$hash->{helper}{groups}}) {
@@ -637,7 +653,7 @@ sub Signalbot_Get($@) {
 			$grcnt_t++;
 		}
 		if ($grcnt_t>0) {
-			$group_t=$group_t=~s/ /&nbsp;/gr;
+			$group_t=~s/ /&nbsp;/g;
 			$gets.=	"groupProperties:".($grcnt_t<20?$group_t:"textField")." ";
 		}
 		if ($version>=1111) {
@@ -653,7 +669,7 @@ sub Signalbot_Get($@) {
 				$idcnt_t++; 
 			}
 
-			$ident_t=$ident_t=~s/ /_/gr;
+			$ident_t=~s/ /_/g;
 			$gets.=	"identityDetails:".($idcnt_t<20?$ident_t:"textField")." ";
 		}
 		return "Signalbot_Get: Unknown argument $cmd, choose one of ".$gets;
@@ -723,6 +739,16 @@ sub Signalbot_Get($@) {
 			}
 		}
 	return $str;
+	} elsif ($cmd eq "chat") {
+		my $ret="";
+		my $chat=$hash->{helper}{chat}{$arg};
+		if (defined $chat) {
+			$ret.="Chat history with $arg\n\n";
+			$ret.=$chat;
+		} else {
+			$ret="No chat history with $arg";
+		}
+		return $ret;
 	} elsif ($cmd eq "favorites") {
 		my $favs = AttrVal($name,"favorites","");
 		$favs =~ s/[\n\r]//g;
@@ -1095,6 +1121,8 @@ sub Signalbot_MessageReceived ($@) {
 		readingsBulkUpdate($hash, "msgText", $message);
 		readingsBulkUpdate($hash, "msgSender", $sender);
 		readingsBulkUpdate($hash, "msgGroupName", $group);
+		Signalbot_AddToChat($hash,$sender,$sender,$group,$message);
+		
 		#Check if for command execution
 		my $auth=0;
 		if (defined $hash->{helper}{auth}{$source}) { $auth=$hash->{helper}{auth}{$source}; }
@@ -1132,6 +1160,25 @@ sub Signalbot_MessageReceived ($@) {
 		LogUnicode $hash->{NAME}, 2, $hash->{NAME}.": Ignored message due to allowedPeer by $source:$message";
 		readingsSingleUpdate($hash, 'lastError', "Ignored message due to allowedPeer by $source:$message",1);
 	}
+}
+
+sub Signalbot_AddToChat($$$$$) {
+	my ($hash,$name,$sender,$group,$message) = @_;
+	$group=~s/#//g;
+	$group=~s/ /_/g;
+	$sender=~s/ /_/g;
+	print "$group:$sender:\n";
+	my $index=$sender;
+	$index="+".$group if $group ne "";
+	my $text=$hash->{helper}{chat}{$index};
+	$text.="<b>$name</b>: $message\n";
+	my $line_count =()= $text =~ m/<b>/g;
+	while ($line_count>20) {
+		$text=~s/<b>.*?<b>//ms;
+		$text="<b>".$text; #restore <b> that was removed before
+		$line_count =()= $text =~ m/<b>/g;
+	}
+	$hash->{helper}{chat}{$index}=$text;
 }
 
 sub Signalbot_ReceiptReceived {
@@ -1207,6 +1254,7 @@ sub Signalbot_setup($@){
 	$hash->{helper}{register}=undef;
 	$hash->{helper}{verification}=undef;
 	$hash->{helper}{captcha}=undef;
+	$hash->{helper}{chat}=undef;
 
 	my $dbus = Protocol::DBus::Client::system();
 	if (!defined $dbus) {

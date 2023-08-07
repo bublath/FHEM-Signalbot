@@ -564,6 +564,7 @@ sub Signalbot_prepareSend($@) {
 	return "Specify either a message text or an attachment" if((@attachments==0) && (@args==0));
 
 	$message = join(" ", @args);
+	my @orgatt=@attachments;
 	if (@attachments>0) {
 		#create copy in /tmp to mitigate incomplete files and relative paths in fhem
 		my @newatt;
@@ -596,14 +597,14 @@ sub Signalbot_prepareSend($@) {
 	if (@recipients > 0) {
 		$ret=Signalbot_sendMessage($hash,join(",",@recipients),join(",",@attachments),$message);
 		foreach my $sender (@recipients) {
-			Signalbot_AddToChat($hash,"Me",$sender,"",$message);
-		}
+			Signalbot_AddToChat($hash,"Me",$sender,"",$message.(@attachments>0?"(".join(",",@orgatt).")":""));
+			}
 	}
 	if (@groups > 0) {
 	#Send message to groups (one at time)
 		while(my $currgroup = shift @groups){
 			$ret=Signalbot_sendGroupMessage($hash,$currgroup,join(",",@attachments),$message);
-			Signalbot_AddToChat($hash,"Me","",$currgroup,$message);
+			Signalbot_AddToChat($hash,"Me","",$currgroup,$message.(@attachments>0?"(".join(",",@orgatt).")":""));
 		}
 	}
 	#Remember temp files
@@ -722,7 +723,7 @@ sub Signalbot_Get($@) {
 				#Don't display as it is very long and not sure what it's used for anyway
 				my $fp=$props{Fingerprint};
 				#$str.="Fingerprint             :".join(" ",@$fp)."\n";
-				#$str.="Added date              :". strftime("%d-%m-%Y %H:%M:%S", localtime($props{AddedDate}/1000))."\n";
+				$str.="Added date              :". strftime("%d-%m-%Y %H:%M:%S", localtime($props{AddedDate}/1000))."\n";
 				my $sf=$props{ScannableSafetyNumber};
 				my $cstr=pack("C*",@$sf);
 				my $fn=Signalbot_copyToFile($cstr,"dat");
@@ -1171,7 +1172,7 @@ sub Signalbot_AddToChat($$$$$) {
 	my $index=$sender;
 	$index="+".$group if $group ne "";
 	my $text=$hash->{helper}{chat}{$index};
-	$text.="<b>$name</b>: $message\n";
+	$text.="<b>$name</b> (".strftime("%d-%m-%Y %H:%M", localtime)."): $message\n";
 	my $line_count =()= $text =~ m/<b>/g;
 	while ($line_count>20) {
 		$text=~s/<b>.*?<b>//ms;

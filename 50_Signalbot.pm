@@ -64,10 +64,10 @@ use vars qw($FW_wname);
 	"setPin"				=> "s", #V0.10.0
 	"removePin"				=> "", #V0.10.0
 	"getGroup"				=> "ay", #V0.10.0
-	"getIdentity"			=> "s", #V0.11.12
+	"getIdentity"			=> "s", #V0.12.0
 	"addDevice"				=> "s",
 	"listDevices"			=> "",
-	"listIdentities"		=> "", #V0.11.12
+	"listIdentities"		=> "", #V0.12.0
 	"unregister"			=> "",
 	"sendEndSessionMessage" => "as",		#unused
 	"sendRemoteDeleteMessage" => "xas",		#unused
@@ -192,7 +192,7 @@ sub Signalbot_Set($@) {					#
 				"updateGroup:textField ".
 				"quitGroup:textField ".
 				"joinGroup:textField " if $version <1000;
-	if ($version>=1111) {
+	if ($version>=1200) {
 		my $ident_t="";
 		my $idcnt_t=1;
 		my $ident_u="";
@@ -657,7 +657,7 @@ sub Signalbot_Get($@) {
 			$group_t=~s/ /&nbsp;/g;
 			$gets.=	"groupProperties:".($grcnt_t<20?$group_t:"textField")." ";
 		}
-		if ($version>=1111) {
+		if ($version>=1200) {
 			my $ident_t="";
 			my $idcnt_t=0;
 			foreach my $number (keys %{$hash->{helper}{identities}}) {
@@ -1372,7 +1372,7 @@ sub Signalbot_setup2($@) {
 	#-u Mode or already registered
 	if ($num<0 || $account ne "none") {
 		Signalbot_CallA($hash,"listNumbers");
-		Signalbot_CallA($hash,"listIdentities") if $version>=1111;
+		Signalbot_CallA($hash,"listIdentities") if $version>=1200;
 		#Might make sense to call refreshGroups here, however, that is a sync call and might potentially take longer, so maybe no good idea in startup
 		readingsBeginUpdate($hash);
 		readingsBulkUpdate($hash, 'account', $account) if defined $account;

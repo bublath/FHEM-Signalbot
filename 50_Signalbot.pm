@@ -1,6 +1,6 @@
 ##############################################
 #$Id$
-my $Signalbot_VERSION="3.15";
+my $Signalbot_VERSION="3.16";
 # Simple Interface to Signal CLI running as Dbus service
 # Author: Adimarantis
 # License: GPL
@@ -390,7 +390,7 @@ sub Signalbot_Set($@) {					#
 		my $ret=Signalbot_CallSG($hash,"deleteGroup",shift @args);
 		return $hash->{helper}{lasterr} if !defined $ret;
 		delete $hash->{helper}{groups}; #Delete the whole hash to clean up removed groups
-		print "deleted" if !defined $hash->{helper}{groups};
+		#print "deleted" if !defined $hash->{helper}{groups};
 		Signalbot_refreshGroups($hash); #and read the back
 		return;		
 	} elsif ( $cmd eq "addGroupMembers" || $cmd eq "groupaddMembers") {
@@ -1168,7 +1168,6 @@ sub Signalbot_AddToChat($$$$$) {
 	$group=~s/#//g;
 	$group=~s/ /_/g;
 	$sender=~s/ /_/g;
-	print "$group:$sender:\n";
 	my $index=$sender;
 	$index="+".$group if $group ne "";
 	my $text=$hash->{helper}{chat}{$index};
@@ -1459,7 +1458,7 @@ sub	Signalbot_CallSG($@) {
 #sync, identity
 sub	Signalbot_CallSI($@) { 
 	my ($hash,$function,$identity,@args) = @_;
-	print "Calling $function for $identity with";
+	#print "Calling $function for $identity with";
 	my $prototype=$identitysignatures{$function};
 	my $path=Signalbot_getIdentityPath($hash,$identity);
 	return if !defined $path;

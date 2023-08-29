@@ -2888,7 +2888,7 @@ For German documentation see <a href="https://wiki.fhem.de/wiki/Signalbot">Wiki<
 			<a id="Signalbot-get-groupProperties"></a>
 			Shows all known properties of the given group, like members, admins and permissions.
 		</li>
-		<li><b>get identityDetails &ltgroup&gt</b><br>
+		<li><b>get identityDetails &ltcontact&gt</b><br>
 			<a id="Signalbot-get-identityDetails"></a>
 			Shows all known details of a contacts identity.<br>
 			This includes the safetynumber for verification purposes.

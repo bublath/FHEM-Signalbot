@@ -662,7 +662,10 @@ else
 	echo "You chose the following option: $OPERATION"
 fi
 echo
-if [ -z "$OPERATION" ] || [ "$OPERATION" = "system" ] || [ "$OPERATION" = "install" ] || [ "$OPERATION" = "all" ]; then
+
+
+if ((( [ "$OPERATION" = "install" ] || [ "$OPERATION" = "all" ] ) && ( ! [ "$2" = '-y' ] )) ||
+     ( [ -z "$OPERATION" ] || [ "$OPERATION" = "system" ]  )); then
   echo -n "Proceed (Y/n)? "
   read REPLY
   if [ "$REPLY" = "n" ]; then
@@ -712,14 +715,16 @@ if [ $OPERATION = "restore" ]; then
 		echo "Make sure signal-backup.tar.gz is in current directory"
 		exit
 	fi
-	echo "Are you sure you want to restore all signal-cli configuration files?"
-	echo -n "Any existing configuration will be lost (y/N)? "
-	read REPLY
-	if ! [ "$REPLY" = "y" ]; then
+        if ! [ "$2" = '-y' ]; then 
+  	  echo "Are you sure you want to restore all signal-cli configuration files?"
+	  echo -n "Any existing configuration will be lost (y/N)? "
+	  read REPLY
+	  if ! [ "$REPLY" = "y" ]; then
 		echo "Aborting..."
 		exit
-	fi
-	stop_service
+	  fi
+	  stop_service
+        fi
 	echo -n "Restoring backup..."
 	tar xPf signal-backup.tar.gz
 	chown -R $SIGNALUSER: $SIGNALVAR

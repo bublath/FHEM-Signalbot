@@ -29,7 +29,7 @@ JAVA_NATIVE=yes
 
 if [ $OPERATION = "-y" ]; then
   OPERATION="all"
-  UNATTENED="-y"
+  UNATTENDED="-y"
 fi
 
 #Check if Java 21 installation is available for this system
@@ -674,7 +674,7 @@ fi
 echo
 
 
-if ((( [ "$OPERATION" = "install" ] || [ "$OPERATION" = "all" ] ) && ( ! [ "$UNATTENED" = '-y' ] )) ||
+if ((( [ "$OPERATION" = "install" ] || [ "$OPERATION" = "all" ] ) && ( ! [ "$UNATTENDED" = '-y' ] )) ||
      ( [ -z "$OPERATION" ] || [ "$OPERATION" = "system" ]  )); then
   echo -n "Proceed (Y/n)? "
   read REPLY
@@ -725,7 +725,7 @@ if [ $OPERATION = "restore" ]; then
 		echo "Make sure signal-backup.tar.gz is in current directory"
 		exit
 	fi
-        if ! [ "$UNATTENED" = '-y' ]; then 
+        if ! [ "$UNATTENDED" = '-y' ]; then 
   	  echo "Are you sure you want to restore all signal-cli configuration files?"
 	  echo -n "Any existing configuration will be lost (y/N)? "
 	  read REPLY

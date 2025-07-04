@@ -1,6 +1,6 @@
 #!/bin/bash
 #$Id:$
-SCRIPTVERSION="3.31"
+SCRIPTVERSION="3.32"
 # Author: Adimarantis
 # License: GPL
 #Install script for signal-cli 
@@ -27,7 +27,7 @@ JAVA_VERSION=21.0
 JDK_PACKAGE=openjdk-21-jre-headless
 JAVA_NATIVE=yes
 
-if [ $OPERATION = "-y" ]; then
+if [ "$OPERATION" = "-y" ]; then
   OPERATION="all"
   UNATTENDED="-y"
 fi
